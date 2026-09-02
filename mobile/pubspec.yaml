@@ -9,6 +9,7 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
+  camera: ^0.12.0+2
   geolocator: ^14.0.3
 
 dev_dependencies:
