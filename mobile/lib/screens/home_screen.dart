@@ -1,9 +1,77 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../services/api_service.dart';
 import '../widgets/urbaneye_design_system.dart';
 
-class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({this.apiService, super.key});
+
+  final ApiService? apiService;
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  late final ApiService _apiService;
+  late final bool _ownsApiService;
+  _BackendHealth _backendHealth = _BackendHealth.checking;
+
+  @override
+  void initState() {
+    super.initState();
+    _ownsApiService = widget.apiService == null;
+    _apiService = widget.apiService ?? ApiService();
+    unawaited(_checkBackendHealth());
+  }
+
+  @override
+  void dispose() {
+    if (_ownsApiService) {
+      _apiService.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _checkBackendHealth() async {
+    final isOnline = await _apiService.checkHealth();
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _backendHealth =
+          isOnline ? _BackendHealth.online : _BackendHealth.offline;
+    });
+  }
+
+  StatusChip get _backendHealthChip {
+    switch (_backendHealth) {
+      case _BackendHealth.checking:
+        return const StatusChip(
+          label: 'Checking Backend',
+          icon: Icons.sync_rounded,
+          backgroundColor: Color(0xFFE0F2FE),
+          foregroundColor: Color(0xFF0369A1),
+        );
+      case _BackendHealth.online:
+        return const StatusChip(
+          label: 'Backend Online',
+          icon: Icons.check_circle_rounded,
+          backgroundColor: Color(0xFFF0FDF4),
+          foregroundColor: Color(0xFF15803D),
+        );
+      case _BackendHealth.offline:
+        return const StatusChip(
+          label: 'Backend Offline',
+          icon: Icons.error_outline_rounded,
+          backgroundColor: Color(0xFFFFE4E6),
+          foregroundColor: Color(0xFFBE123C),
+        );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -24,10 +92,17 @@ class HomeScreen extends StatelessWidget {
                 leading: _ProfileAvatar(
                   onTap: () => Navigator.pushNamed(context, '/profile'),
                 ),
-                footer: const StatusChip(
-                  label: 'Vehicle Online',
-                  backgroundColor: Color(0xFFF0FDF4),
-                  foregroundColor: Color(0xFF15803D),
+                footer: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    const StatusChip(
+                      label: 'Vehicle Online',
+                      backgroundColor: Color(0xFFF0FDF4),
+                      foregroundColor: Color(0xFF15803D),
+                    ),
+                    _backendHealthChip,
+                  ],
                 ),
               ),
               const SizedBox(height: 24),
@@ -135,6 +210,8 @@ class HomeScreen extends StatelessWidget {
     );
   }
 }
+
+enum _BackendHealth { checking, online, offline }
 
 class _ProfileAvatar extends StatelessWidget {
   const _ProfileAvatar({required this.onTap});
