@@ -70,10 +70,13 @@ void main() {
     expect(find.byType(PrimaryCard), findsOneWidget);
     expect(find.byType(PrimaryButton), findsOneWidget);
     expect(find.text('Live GPS'), findsOneWidget);
-    expect(find.text('ONLINE'), findsOneWidget);
-    expect(find.text('28.6139° N, 77.2090° E'), findsOneWidget);
+    expect(find.text('READY'), findsNWidgets(2));
+    expect(find.text('Waiting for a GPS fix'), findsOneWidget);
+    expect(find.text('Accuracy'), findsOneWidget);
+    expect(find.text('Speed'), findsOneWidget);
+    expect(find.text('--'), findsNWidgets(2));
     expect(find.text('Last updated'), findsOneWidget);
-    expect(find.text('Just now'), findsOneWidget);
+    expect(find.text('Not yet updated'), findsOneWidget);
     expect(find.text('Start Tracking'), findsOneWidget);
 
     await tester.pageBack();
