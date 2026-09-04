@@ -3,16 +3,19 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
+import '../services/api_service.dart';
 import '../services/location_service.dart';
 import '../widgets/urbaneye_design_system.dart';
 
 class LiveGpsScreen extends StatefulWidget {
   const LiveGpsScreen({
     this.locationService = const GeolocatorLocationService(),
+    this.apiService,
     super.key,
   });
 
   final LocationService locationService;
+  final ApiService? apiService;
 
   @override
   State<LiveGpsScreen> createState() => _LiveGpsScreenState();
@@ -20,7 +23,10 @@ class LiveGpsScreen extends StatefulWidget {
 
 class _LiveGpsScreenState extends State<LiveGpsScreen> {
   static const _trackingInterval = Duration(seconds: 5);
+  static const _vehicleId = 'BUS-001';
 
+  late final ApiService _apiService;
+  late final bool _ownsApiService;
   Timer? _trackingTimer;
   Position? _position;
   DateTime? _lastUpdated;
@@ -28,10 +34,28 @@ class _LiveGpsScreenState extends State<LiveGpsScreen> {
   bool _isStarting = false;
   bool _isTracking = false;
   bool _isFetchingLocation = false;
+  bool _isSendingLocation = false;
+  int _trackingSession = 0;
+  Completer<void>? _locationUploadAborter;
+
+  @override
+  void initState() {
+    super.initState();
+    _ownsApiService = widget.apiService == null;
+    _apiService = widget.apiService ?? ApiService();
+  }
 
   @override
   void dispose() {
     _trackingTimer?.cancel();
+    _trackingSession += 1;
+    _isStarting = false;
+    _isTracking = false;
+    _isFetchingLocation = false;
+    _cancelLocationUpload();
+    if (_ownsApiService) {
+      _apiService.dispose();
+    }
     super.dispose();
   }
 
@@ -74,6 +98,7 @@ class _LiveGpsScreenState extends State<LiveGpsScreen> {
         return;
       }
 
+      _trackingSession += 1;
       setState(() {
         _isStarting = false;
         _isTracking = true;
@@ -94,6 +119,7 @@ class _LiveGpsScreenState extends State<LiveGpsScreen> {
       return;
     }
 
+    final trackingSession = _trackingSession;
     _isFetchingLocation = true;
     try {
       final serviceEnabled =
@@ -104,7 +130,7 @@ class _LiveGpsScreenState extends State<LiveGpsScreen> {
       }
 
       final position = await widget.locationService.getCurrentPosition();
-      if (!mounted || !_isTracking) {
+      if (!mounted || !_isTracking || trackingSession != _trackingSession) {
         return;
       }
 
@@ -113,19 +139,76 @@ class _LiveGpsScreenState extends State<LiveGpsScreen> {
         _lastUpdated = DateTime.now();
         _issue = null;
       });
+      unawaited(_sendLocation(position, trackingSession));
     } on LocationServiceDisabledException {
-      _setIssue(_GpsIssue.locationServicesDisabled);
+      if (_isTracking && trackingSession == _trackingSession) {
+        _setIssue(_GpsIssue.locationServicesDisabled);
+      }
     } catch (_) {
-      _setIssue(_GpsIssue.unavailable);
+      if (_isTracking && trackingSession == _trackingSession) {
+        _setIssue(_GpsIssue.unavailable);
+      }
     } finally {
-      _isFetchingLocation = false;
+      if (trackingSession == _trackingSession) {
+        _isFetchingLocation = false;
+      }
+    }
+  }
+
+  Future<void> _sendLocation(Position position, int trackingSession) async {
+    if (!_isTracking ||
+        _isSendingLocation ||
+        trackingSession != _trackingSession) {
+      return;
+    }
+
+    final aborter = Completer<void>();
+    _locationUploadAborter = aborter;
+    _isSendingLocation = true;
+    try {
+      await _apiService.sendLocation(
+        vehicleId: _vehicleId,
+        latitude: position.latitude,
+        longitude: position.longitude,
+        speed: _nonNegativeFiniteValue(position.speed),
+        accuracy: _nonNegativeFiniteValue(position.accuracy),
+        timestamp: position.timestamp,
+        abortTrigger: aborter.future,
+      );
+    } catch (_) {
+      // Keep local tracking active; the next tracking interval retries upload.
+    } finally {
+      if (identical(_locationUploadAborter, aborter)) {
+        _locationUploadAborter = null;
+      }
+      if (trackingSession == _trackingSession) {
+        _isSendingLocation = false;
+      }
+    }
+  }
+
+  static double _nonNegativeFiniteValue(double value) {
+    return value.isFinite && value >= 0 ? value : 0;
+  }
+
+  void _cancelLocationUpload() {
+    final aborter = _locationUploadAborter;
+    _locationUploadAborter = null;
+    _isSendingLocation = false;
+    if (aborter != null && !aborter.isCompleted) {
+      aborter.complete();
     }
   }
 
   void _stopTracking() {
     _trackingTimer?.cancel();
     _trackingTimer = null;
+    _trackingSession += 1;
+    _isFetchingLocation = false;
+    _cancelLocationUpload();
     if (!mounted) {
+      _isStarting = false;
+      _isTracking = false;
       return;
     }
 
@@ -139,7 +222,12 @@ class _LiveGpsScreenState extends State<LiveGpsScreen> {
   void _setIssue(_GpsIssue issue) {
     _trackingTimer?.cancel();
     _trackingTimer = null;
+    _trackingSession += 1;
+    _isFetchingLocation = false;
+    _cancelLocationUpload();
     if (!mounted) {
+      _isStarting = false;
+      _isTracking = false;
       return;
     }
 

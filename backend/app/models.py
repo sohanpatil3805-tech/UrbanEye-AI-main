@@ -1,15 +1,16 @@
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
 class LocationPayload(BaseModel):
-    device_id: str = Field(..., min_length=2, max_length=64)
-    latitude: float = Field(..., ge=-90, le=90)
-    longitude: float = Field(..., ge=-180, le=180)
-    speed_kmph: Optional[float] = Field(default=None, ge=0)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    vehicle_id: str = Field(..., min_length=1, max_length=64)
+    latitude: float = Field(..., ge=-90, le=90, allow_inf_nan=False)
+    longitude: float = Field(..., ge=-180, le=180, allow_inf_nan=False)
+    speed: float = Field(..., ge=0, allow_inf_nan=False)
+    accuracy: float = Field(..., ge=0, allow_inf_nan=False)
+    timestamp: datetime
 
 
 class EventPayload(BaseModel):

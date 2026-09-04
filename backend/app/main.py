@@ -1,3 +1,5 @@
+import logging
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, File, UploadFile
@@ -12,6 +14,9 @@ app = FastAPI(
     version="0.1.0",
 )
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 locations: list[LocationPayload] = []
 events: list[EventResponse] = []
 
@@ -22,13 +27,27 @@ def root() -> dict[str, str]:
 
 
 @app.post("/location", tags=["Telemetry"])
-def ingest_location(payload: LocationPayload) -> dict[str, object]:
+def ingest_location(payload: LocationPayload) -> dict[str, str]:
     locations.append(payload)
-    return {
-        "message": "Location recorded",
-        "count": len(locations),
-        "latest": payload,
-    }
+    logger.info("Received location: %s", payload.model_dump(mode="json"))
+    return {"status": "success"}
+
+
+@app.post("/detect", tags=["Vision"])
+async def upload_for_detection(file: UploadFile = File(...)) -> dict[str, str]:
+    uploads_dir = Path("uploads")
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    extension = Path(file.filename or "").suffix.lower()
+    filename = f"{datetime.now():%Y%m%d_%H%M%S_%f}{extension}"
+    destination = uploads_dir / filename
+
+    try:
+        destination.write_bytes(await file.read())
+    finally:
+        await file.close()
+
+    return {"status": "success", "filename": filename}
 
 
 @app.post("/upload", response_model=UploadResponse, tags=["Vision"])

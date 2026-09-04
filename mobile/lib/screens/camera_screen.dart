@@ -4,10 +4,13 @@ import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
+import '../services/api_service.dart';
 import '../widgets/urbaneye_design_system.dart';
 
 class CameraScreen extends StatefulWidget {
-  const CameraScreen({super.key});
+  const CameraScreen({this.apiService, super.key});
+
+  final ApiService? apiService;
 
   @override
   State<CameraScreen> createState() => _CameraScreenState();
@@ -17,15 +20,21 @@ class _CameraScreenState extends State<CameraScreen>
     with WidgetsBindingObserver {
   static const _cameraDiscoveryTimeout = Duration(seconds: 3);
 
+  late final ApiService _apiService;
+  late final bool _ownsApiService;
   CameraController? _cameraController;
   Uint8List? _capturedPhoto;
   _CameraUiState _cameraState = _CameraUiState.loading;
   bool _isCapturing = false;
+  bool _isUploading = false;
   int _initializationToken = 0;
+  Completer<void>? _uploadAborter;
 
   @override
   void initState() {
     super.initState();
+    _ownsApiService = widget.apiService == null;
+    _apiService = widget.apiService ?? ApiService();
     WidgetsBinding.instance.addObserver(this);
     unawaited(_initializeCamera());
   }
@@ -46,10 +55,14 @@ class _CameraScreenState extends State<CameraScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _initializationToken += 1;
+    _cancelUpload();
     final controller = _cameraController;
     _cameraController = null;
     if (controller != null) {
       unawaited(_disposeController(controller));
+    }
+    if (_ownsApiService) {
+      _apiService.dispose();
     }
     super.dispose();
   }
@@ -201,7 +214,7 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   Future<void> _retakePhoto() async {
-    if (!mounted) {
+    if (!mounted || _isUploading) {
       return;
     }
 
@@ -219,6 +232,58 @@ class _CameraScreenState extends State<CameraScreen>
       await controller.resumePreview();
     } catch (_) {
       await _initializeCamera();
+    }
+  }
+
+  Future<void> _uploadCapturedPhoto() async {
+    final capturedPhoto = _capturedPhoto;
+    if (capturedPhoto == null || _isUploading) {
+      return;
+    }
+
+    final aborter = Completer<void>();
+    setState(() {
+      _isUploading = true;
+      _uploadAborter = aborter;
+    });
+
+    var uploadSucceeded = false;
+    try {
+      uploadSucceeded = await _apiService.uploadDetectionImage(
+        imageBytes: capturedPhoto,
+        abortTrigger: aborter.future,
+      );
+    } catch (_) {
+      uploadSucceeded = false;
+    }
+
+    if (!mounted || !identical(_uploadAborter, aborter)) {
+      return;
+    }
+
+    _uploadAborter = null;
+    setState(() {
+      _isUploading = false;
+    });
+
+    if (uploadSucceeded) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Upload Successful')),
+      );
+      Navigator.of(context).maybePop();
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Upload Failed')),
+    );
+  }
+
+  void _cancelUpload() {
+    final aborter = _uploadAborter;
+    _uploadAborter = null;
+    if (aborter != null && !aborter.isCompleted) {
+      aborter.complete();
     }
   }
 
@@ -293,8 +358,10 @@ class _CameraScreenState extends State<CameraScreen>
     if (capturedPhoto != null) {
       return _CapturedPhotoPreview(
         photoBytes: capturedPhoto,
-        onRetake: () => unawaited(_retakePhoto()),
-        onContinue: () => Navigator.of(context).maybePop(),
+        isUploading: _isUploading,
+        onRetake: _isUploading ? null : () => unawaited(_retakePhoto()),
+        onContinue:
+            _isUploading ? null : () => unawaited(_uploadCapturedPhoto()),
       );
     }
 
@@ -702,13 +769,15 @@ class _DisabledToolButton extends StatelessWidget {
 class _CapturedPhotoPreview extends StatelessWidget {
   const _CapturedPhotoPreview({
     required this.photoBytes,
+    required this.isUploading,
     required this.onRetake,
     required this.onContinue,
   });
 
   final Uint8List photoBytes;
-  final VoidCallback onRetake;
-  final VoidCallback onContinue;
+  final bool isUploading;
+  final VoidCallback? onRetake;
+  final VoidCallback? onContinue;
 
   @override
   Widget build(BuildContext context) {
@@ -752,7 +821,7 @@ class _CapturedPhotoPreview extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'This image is stored locally for preview only and has not been sent.',
+                    'Review your photo, then upload it to UrbanEye AI for processing.',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           color: Colors.white.withValues(alpha: 0.82),
                         ),
@@ -770,14 +839,40 @@ class _CapturedPhotoPreview extends StatelessWidget {
                   ),
                   const SizedBox(height: 12),
                   PrimaryButton(
-                    label: 'Continue',
-                    icon: Icons.arrow_forward_rounded,
+                    label: isUploading ? 'Uploading...' : 'Continue',
+                    icon: isUploading ? null : Icons.arrow_forward_rounded,
                     onPressed: onContinue,
                   ),
                 ],
               ),
             ),
           ),
+          if (isUploading)
+            const Positioned.fill(
+              child: ColoredBox(
+                color: Color(0x990F172A),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 40,
+                        height: 40,
+                        child: CircularProgressIndicator(color: Colors.white),
+                      ),
+                      SizedBox(height: 16),
+                      Text(
+                        'Uploading image...',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
