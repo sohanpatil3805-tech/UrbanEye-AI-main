@@ -1,21 +1,42 @@
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from .models import EventPayload, EventResponse, LocationPayload, UploadResponse
 from .services.detector import run_yolov8_stub
 from .services.firebase import publish_event_placeholder
+from .services.yolo_service import (
+    IncompatibleModelError,
+    InferenceError,
+    ModelUnavailableError,
+    detect_image,
+    load_yolo_model,
+)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    try:
+        load_yolo_model()
+    except ModelUnavailableError:
+        # Keep the API available so /detect can return a clear 503 response.
+        logger.exception("Road-damage model could not be loaded at startup")
+    yield
+
 
 app = FastAPI(
     title="UrbanEye AI Backend",
     description="FastAPI backend scaffold for UrbanEye AI (SIH26124)",
     version="0.1.0",
+    lifespan=lifespan,
 )
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 locations: list[LocationPayload] = []
 events: list[EventResponse] = []
@@ -34,31 +55,62 @@ def ingest_location(payload: LocationPayload) -> dict[str, str]:
 
 
 @app.post("/detect", tags=["Vision"])
-async def upload_for_detection(file: UploadFile = File(...)) -> dict[str, str]:
+async def upload_for_detection(file: UploadFile = File(...)) -> dict[str, object]:
     uploads_dir = Path("uploads")
-    uploads_dir.mkdir(parents=True, exist_ok=True)
-
     extension = Path(file.filename or "").suffix.lower()
     filename = f"{datetime.now():%Y%m%d_%H%M%S_%f}{extension}"
     destination = uploads_dir / filename
 
     try:
+        uploads_dir.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(await file.read())
+    except Exception as exc:
+        logger.exception("Unable to save detection upload")
+        raise HTTPException(
+            status_code=500, detail="Unable to save uploaded image."
+        ) from exc
     finally:
         await file.close()
 
-    return {"status": "success", "filename": filename}
+    try:
+        detections = await run_in_threadpool(detect_image, destination)
+    except IncompatibleModelError as exc:
+        logger.error("Incompatible road-damage model: %s", exc)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ModelUnavailableError as exc:
+        logger.error("Road-damage model unavailable: %s", exc)
+        raise HTTPException(
+            status_code=503, detail="Road-damage model is unavailable."
+        ) from exc
+    except InferenceError as exc:
+        logger.exception("Road-damage inference failed")
+        raise HTTPException(
+            status_code=500, detail="Unable to process image for detection."
+        ) from exc
+    except Exception as exc:
+        logger.exception("Unexpected road-damage detection failure")
+        raise HTTPException(
+            status_code=500, detail="Unable to process image for detection."
+        ) from exc
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "detections": detections,
+    }
 
 
 @app.post("/upload", response_model=UploadResponse, tags=["Vision"])
 async def upload_frame(file: UploadFile = File(...)) -> UploadResponse:
     uploads_dir = Path("uploads")
     uploads_dir.mkdir(parents=True, exist_ok=True)
+
     destination = uploads_dir / file.filename
     content = await file.read()
     destination.write_bytes(content)
 
     stub_result = run_yolov8_stub(destination)
+
     return UploadResponse(
         filename=file.filename,
         message="File received successfully",
