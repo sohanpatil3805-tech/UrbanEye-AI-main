@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+
+import '../models/detection_response.dart';
 
 /// Lightweight client for the UrbanEye AI backend.
 ///
@@ -107,13 +110,13 @@ class ApiService {
   }
 
   /// Uploads a captured image to the detection endpoint as multipart data.
-  Future<bool> uploadDetectionImage({
+  Future<DetectionUploadResult> uploadDetectionImage({
     required Uint8List imageBytes,
     String filename = 'capture.jpg',
     Future<void>? abortTrigger,
   }) async {
     if (imageBytes.isEmpty) {
-      return false;
+      return const DetectionUploadResult.failure('The captured image is empty.');
     }
 
     final uploadFilename = filename.trim().isEmpty ? 'capture.jpg' : filename;
@@ -136,9 +139,37 @@ class ApiService {
           .then(http.Response.fromStream)
           .timeout(_detectionUploadTimeout);
 
-      return response.statusCode >= 200 && response.statusCode < 300;
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        try {
+          return DetectionUploadResult.success(
+            DetectionResponse.fromJson(jsonDecode(response.body)),
+          );
+        } on FormatException {
+          return const DetectionUploadResult.failure(
+            'The server returned an invalid detection result. Please try again.',
+          );
+        }
+      }
+      if (response.statusCode == 500 || response.statusCode == 503) {
+        return const DetectionUploadResult.failure(
+          'Road-damage analysis is temporarily unavailable. Please try again.',
+        );
+      }
+      return const DetectionUploadResult.failure(
+        'Unable to analyze this image. Please try again.',
+      );
+    } on TimeoutException {
+      return const DetectionUploadResult.failure(
+        'Analysis timed out. Check your connection and try again.',
+      );
+    } on http.ClientException {
+      return const DetectionUploadResult.failure(
+        'Unable to reach the analysis service. Check your connection.',
+      );
     } catch (_) {
-      return false;
+      return const DetectionUploadResult.failure(
+        'Unable to analyze this image. Please try again.',
+      );
     }
   }
 

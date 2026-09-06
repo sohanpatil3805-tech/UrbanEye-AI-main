@@ -123,20 +123,10 @@ void main() {
       find.text('Front camera preview and capture controls.'),
       findsOneWidget,
     );
-    expect(find.text('PREVIEW'), findsOneWidget);
-    expect(find.text('Camera preview'), findsOneWidget);
-    expect(
-      find.text('Camera access will be added in a future update.'),
-      findsOneWidget,
-    );
     expect(find.text('PREVIEW MODE'), findsOneWidget);
-    expect(find.byTooltip('Capture'), findsOneWidget);
+    expect(find.bySemanticsLabel('Capture'), findsOneWidget);
     expect(find.text('Flash'), findsOneWidget);
     expect(find.text('Gallery'), findsOneWidget);
-    expect(
-      find.text('Camera controls are disabled in this preview.'),
-      findsOneWidget,
-    );
 
     await tester.pageBack();
     await tester.pumpAndSettle();

@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
+import '../models/detection_response.dart';
 import '../services/api_service.dart';
+import '../widgets/bounding_box_overlay.dart';
 import '../widgets/urbaneye_design_system.dart';
 
 class CameraScreen extends StatefulWidget {
@@ -24,6 +27,8 @@ class _CameraScreenState extends State<CameraScreen>
   late final bool _ownsApiService;
   CameraController? _cameraController;
   Uint8List? _capturedPhoto;
+  Size? _capturedImageSize;
+  DetectionResponse? _detectionResponse;
   _CameraUiState _cameraState = _CameraUiState.loading;
   bool _isCapturing = false;
   bool _isUploading = false;
@@ -165,6 +170,11 @@ class _CameraScreenState extends State<CameraScreen>
     try {
       final photo = await controller.takePicture();
       final photoBytes = await photo.readAsBytes();
+      final decodedImage = await ui.decodeImageFromList(photoBytes);
+      final imageSize = Size(
+        decodedImage.width.toDouble(),
+        decodedImage.height.toDouble(),
+      );
 
       if (!mounted || controller != _cameraController) {
         return;
@@ -183,6 +193,8 @@ class _CameraScreenState extends State<CameraScreen>
 
       setState(() {
         _capturedPhoto = photoBytes;
+        _capturedImageSize = imageSize;
+        _detectionResponse = null;
         _isCapturing = false;
       });
     } on CameraException catch (error) {
@@ -220,6 +232,8 @@ class _CameraScreenState extends State<CameraScreen>
 
     setState(() {
       _capturedPhoto = null;
+      _capturedImageSize = null;
+      _detectionResponse = null;
     });
 
     final controller = _cameraController;
@@ -247,15 +261,10 @@ class _CameraScreenState extends State<CameraScreen>
       _uploadAborter = aborter;
     });
 
-    var uploadSucceeded = false;
-    try {
-      uploadSucceeded = await _apiService.uploadDetectionImage(
-        imageBytes: capturedPhoto,
-        abortTrigger: aborter.future,
-      );
-    } catch (_) {
-      uploadSucceeded = false;
-    }
+    final result = await _apiService.uploadDetectionImage(
+      imageBytes: capturedPhoto,
+      abortTrigger: aborter.future,
+    );
 
     if (!mounted || !identical(_uploadAborter, aborter)) {
       return;
@@ -266,16 +275,15 @@ class _CameraScreenState extends State<CameraScreen>
       _isUploading = false;
     });
 
-    if (uploadSucceeded) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Upload Successful')),
-      );
-      Navigator.of(context).maybePop();
+    if (result.isSuccess) {
+      setState(() {
+        _detectionResponse = result.response;
+      });
       return;
     }
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Upload Failed')),
+      SnackBar(content: Text(result.errorMessage ?? 'Analysis failed. Please try again.')),
     );
   }
 
@@ -356,12 +364,23 @@ class _CameraScreenState extends State<CameraScreen>
   Widget build(BuildContext context) {
     final capturedPhoto = _capturedPhoto;
     if (capturedPhoto != null) {
-      return _CapturedPhotoPreview(
-        photoBytes: capturedPhoto,
-        isUploading: _isUploading,
-        onRetake: _isUploading ? null : () => unawaited(_retakePhoto()),
-        onContinue:
-            _isUploading ? null : () => unawaited(_uploadCapturedPhoto()),
+      return WillPopScope(
+        onWillPop: () async => !_isUploading,
+        child: _detectionResponse == null
+            ? _CapturedPhotoPreview(
+                photoBytes: capturedPhoto,
+                isUploading: _isUploading,
+                onRetake: _isUploading ? null : () => unawaited(_retakePhoto()),
+                onContinue: _isUploading ? null : () => unawaited(_uploadCapturedPhoto()),
+              )
+            : DetectionResultView(
+                photoBytes: capturedPhoto,
+                imageSize: _capturedImageSize ?? const Size(1, 1),
+                response: _detectionResponse!,
+                isAnalyzing: _isUploading,
+                onRetry: _isUploading ? null : () => unawaited(_uploadCapturedPhoto()),
+                onRetake: _isUploading ? null : () => unawaited(_retakePhoto()),
+              ),
       );
     }
 
@@ -369,7 +388,9 @@ class _CameraScreenState extends State<CameraScreen>
     final headerStatus = _headerStatus;
     final isCameraReady = _cameraState == _CameraUiState.ready && !_isCapturing;
 
-    return Scaffold(
+    return WillPopScope(
+      onWillPop: () async => !_isUploading,
+      child: Scaffold(
       backgroundColor: colorScheme.surfaceContainerLowest,
       body: SafeArea(
         child: Padding(
@@ -433,6 +454,7 @@ class _CameraScreenState extends State<CameraScreen>
             ],
           ),
         ),
+      ),
       ),
     );
   }
@@ -766,6 +788,191 @@ class _DisabledToolButton extends StatelessWidget {
   }
 }
 
+class DetectionResultView extends StatelessWidget {
+  const DetectionResultView({
+    required this.photoBytes,
+    required this.imageSize,
+    required this.response,
+    required this.isAnalyzing,
+    required this.onRetry,
+    required this.onRetake,
+    super.key,
+  });
+
+  final Uint8List photoBytes;
+  final Size imageSize;
+  final DetectionResponse response;
+  final bool isAnalyzing;
+  final VoidCallback? onRetry;
+  final VoidCallback? onRetake;
+
+  @override
+  Widget build(BuildContext context) {
+    final detections = response.detections;
+    final retryAction = isAnalyzing ? null : onRetry;
+    final retakeAction = isAnalyzing ? null : onRetake;
+    return Scaffold(
+      backgroundColor: const Color(0xFF0F172A),
+      appBar: AppBar(
+        title: const Text('Analysis Results'),
+        backgroundColor: const Color(0xFF0F172A),
+        foregroundColor: Colors.white,
+        leading: IconButton(
+          tooltip: 'Back',
+          onPressed: isAnalyzing
+              ? null
+              : () => Navigator.of(context).maybePop(),
+          icon: const Icon(Icons.arrow_back_rounded),
+        ),
+      ),
+      body: Stack(
+        children: [
+          SafeArea(
+            top: false,
+            child: ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: AspectRatio(
+                aspectRatio: imageSize.width / imageSize.height,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Image.memory(photoBytes, fit: BoxFit.fill),
+                    BoundingBoxOverlay(detections: detections, imageSize: imageSize),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            if (detections.isEmpty)
+              const _ClearRoadCard()
+            else ...[
+              Text(
+                '${detections.length} road issue${detections.length == 1 ? '' : 's'} detected',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                    ),
+              ),
+              const SizedBox(height: 12),
+              for (final detection in detections)
+                _DetectionCard(detection: detection),
+            ],
+            const SizedBox(height: 20),
+            OutlinedButton.icon(
+              onPressed: retakeAction,
+              icon: const Icon(Icons.camera_alt_outlined),
+              label: const Text('Retake / Scan Another'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white,
+                minimumSize: const Size.fromHeight(54),
+                side: const BorderSide(color: Colors.white),
+              ),
+            ),
+            const SizedBox(height: 12),
+            PrimaryButton(
+              label: 'Retry Analysis',
+              icon: Icons.refresh_rounded,
+              onPressed: retryAction,
+            ),
+          ],
+            ),
+          ),
+          if (isAnalyzing)
+            const Positioned.fill(
+              child: ColoredBox(
+                color: Color(0xCC0F172A),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(width: 40, height: 40, child: CircularProgressIndicator(color: Colors.white)),
+                      SizedBox(height: 16),
+                      Text('Analyzing Road Damage...', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ClearRoadCard extends StatelessWidget {
+  const _ClearRoadCard();
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: const Color(0xFF14532D),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFF22C55E)),
+        ),
+        child: const Column(
+          children: [
+            Icon(Icons.verified_rounded, color: Color(0xFF86EFAC), size: 38),
+            SizedBox(height: 10),
+            Text(
+              'ROAD SURFACE CLEAR',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
+            ),
+            SizedBox(height: 5),
+            Text(
+              'No road damage was detected in this image.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Color(0xFFDCFCE7)),
+            ),
+          ],
+        ),
+      );
+}
+
+class _DetectionCard extends StatelessWidget {
+  const _DetectionCard({required this.detection});
+
+  final Detection detection;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E293B),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.warning_amber_rounded, color: Color(0xFFFBBF24)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                detection.label,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  '${(detection.confidence * 100).toStringAsFixed(1)}% confidence',
+                  style: const TextStyle(color: Color(0xFFCBD5E1)),
+                ),
+                Text(
+                  detection.severity.toUpperCase(),
+                  style: const TextStyle(color: Color(0xFFFBBF24), fontWeight: FontWeight.w800),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+}
+
 class _CapturedPhotoPreview extends StatelessWidget {
   const _CapturedPhotoPreview({
     required this.photoBytes,
@@ -821,7 +1028,7 @@ class _CapturedPhotoPreview extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Review your photo, then upload it to UrbanEye AI for processing.',
+                    'Review your photo, then analyze it with UrbanEye AI.',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           color: Colors.white.withValues(alpha: 0.82),
                         ),
@@ -839,8 +1046,8 @@ class _CapturedPhotoPreview extends StatelessWidget {
                   ),
                   const SizedBox(height: 12),
                   PrimaryButton(
-                    label: isUploading ? 'Uploading...' : 'Continue',
-                    icon: isUploading ? null : Icons.arrow_forward_rounded,
+                    label: isUploading ? 'Analyzing Road Damage...' : 'Analyze Road Damage',
+                    icon: isUploading ? null : Icons.analytics_outlined,
                     onPressed: onContinue,
                   ),
                 ],
@@ -862,7 +1069,7 @@ class _CapturedPhotoPreview extends StatelessWidget {
                       ),
                       SizedBox(height: 16),
                       Text(
-                        'Uploading image...',
+                        'Analyzing Road Damage...',
                         style: TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w800,
