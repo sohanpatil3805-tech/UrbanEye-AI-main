@@ -1,0 +1,187 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;600;800&display=swap');
+
+:root, [data-theme='dark'] {
+  /* Dark Palette */
+  --bg-primary: #0A0A0B;
+  --bg-secondary: #121214;
+  --bg-tertiary: #1C1C1F;
+  
+  --text-primary: #FFFFFF;
+  --text-secondary: #A1A1AA;
+  --text-tertiary: #71717A;
+  
+  --accent-primary: #00F0FF;
+  --accent-secondary: #7000FF;
+  
+  --border-color: rgba(255, 255, 255, 0.08);
+  --glass-bg: rgba(18, 18, 20, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.05);
+  --card-bg: #121214;
+  
+  --bg-gradient: radial-gradient(circle at 15% 50%, rgba(0, 240, 255, 0.08) 0%, transparent 50%),
+                 radial-gradient(circle at 85% 30%, rgba(112, 0, 255, 0.08) 0%, transparent 50%);
+                 
+  /* Semantic Colors */
+  --color-critical: #EF4444; /* Slightly brighter for dark mode */
+  --color-pending: #F59E0B;
+  --color-repaired: #10B981;
+  --color-info: #3B82F6;
+}
+
+[data-theme='light'] {
+  /* Light Palette - Elegant Cream & Earthy Tones */
+  --bg-primary: #F2ECDE;
+  --bg-secondary: #FAF5EA;
+  --bg-tertiary: #EBE5D8;
+  
+  --text-primary: #3D342B;
+  --text-secondary: #6E6155;
+  --text-tertiary: #9C8F83;
+  
+  --accent-primary: #A9805B; /* Main Left Accent & Global Active */
+  --accent-secondary: #6B5240;
+  
+  --border-color: #E3D6BE;
+  --glass-bg: #FAF5EA;
+  --glass-border: #E3D6BE;
+  --card-bg: #FAF5EA;
+  
+  --bg-gradient: none;
+  
+  /* Semantic Colors */
+  --color-critical: #E53E3E;
+  --color-pending: #F59E0B;
+  --color-repaired: #10B981;
+  --color-info: #3B82F6;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.6;
+  overflow-x: hidden;
+  background-image: var(--bg-gradient);
+  background-attachment: fixed;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Outfit', sans-serif;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+ul {
+  list-style: none;
+}
+
+/* Utilities */
+.container {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+.text-gradient {
+  background: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-secondary) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.glass-panel {
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+  transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.delay-100 { animation-delay: 100ms; opacity: 0; }
+.delay-200 { animation-delay: 200ms; opacity: 0; }
+.delay-300 { animation-delay: 300ms; opacity: 0; }
+.delay-400 { animation-delay: 400ms; opacity: 0; }
+.delay-500 { animation-delay: 500ms; opacity: 0; }
+
+/* Forza Style Advanced Animations */
+@keyframes swipeReveal {
+  0% { clip-path: polygon(0 0, 0 0, 0 100%, 0% 100%); transform: translateX(-20px); opacity: 0; }
+  100% { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); transform: translateX(0); opacity: 1; }
+}
+
+@keyframes tiltIn {
+  0% { transform: translateY(40px) rotateX(15deg); opacity: 0; }
+  100% { transform: translateY(0) rotateX(0deg); opacity: 1; }
+}
+
+@keyframes fadeInUp {
+  0% { transform: translateY(30px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+.swipe-from-left {
+  animation: swipeReveal 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  opacity: 0;
+}
+
+.tilt-in {
+  animation: tiltIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  opacity: 0;
+  transform-style: preserve-3d;
+  perspective: 1000px;
+}
+
+.fade-in-up {
+  animation: fadeInUp 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+  opacity: 0;
+}
+
+/* Animated Parallax Background */
+.app-container::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle at 30% 30%, rgba(169, 128, 91, 0.04) 0%, transparent 30%),
+              radial-gradient(circle at 70% 70%, rgba(169, 128, 91, 0.05) 0%, transparent 40%);
+  z-index: -1;
+  pointer-events: none;
+  animation: parallaxDrift 40s ease-in-out infinite alternate;
+}
+
+[data-theme='dark'] .app-container::before {
+  background: radial-gradient(circle at 30% 30%, rgba(0, 240, 255, 0.03) 0%, transparent 30%),
+              radial-gradient(circle at 70% 70%, rgba(112, 0, 255, 0.04) 0%, transparent 40%);
+}
+
+@keyframes parallaxDrift {
+  0% { transform: translate(0, 0) scale(1); }
+  100% { transform: translate(-10%, -10%) scale(1.1); }
+}
