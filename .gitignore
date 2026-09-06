@@ -27,3 +27,5 @@ backend/uploads/
 .vscode/
 desktop.ini
 
+# Local Playground
+/localwebsite
