@@ -1,5 +1,12 @@
 import 'package:geolocator/geolocator.dart';
 
+/// The latest accepted GPS fix, shared across screens without restarting GPS.
+class LocationStore {
+  LocationStore._();
+
+  static Position? latestPosition;
+}
+
 abstract interface class LocationService {
   Future<bool> isLocationServiceEnabled();
 

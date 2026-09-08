@@ -14,10 +14,18 @@ class LocationPayload(BaseModel):
 
 
 class EventPayload(BaseModel):
-    event_type: Literal["pothole", "traffic", "accident", "other"]
+    event_type: Literal[
+        "longitudinal_crack",
+        "transverse_crack",
+        "alligator_crack",
+        "pothole",
+        "traffic",
+        "accident",
+        "other",
+    ]
     confidence: float = Field(..., ge=0, le=1)
-    latitude: float = Field(..., ge=-90, le=90)
-    longitude: float = Field(..., ge=-180, le=180)
+    latitude: float = Field(..., ge=-90, le=90, allow_inf_nan=False)
+    longitude: float = Field(..., ge=-180, le=180, allow_inf_nan=False)
     source: Literal["mobile", "camera", "manual"] = "camera"
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 

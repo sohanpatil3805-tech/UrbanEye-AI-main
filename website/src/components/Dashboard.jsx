@@ -7,6 +7,7 @@ import { MapPin, BarChart2, Bell, AlertTriangle, Cpu, Layers, Sun, Moon, Shield,
 import AiModal from './AiModal';
 import MunicipalAnalytics from './MunicipalAnalytics';
 import ThemeToggle from './ThemeToggle';
+import { getEvents, hasValidCoordinates } from '../services/api';
 import './Dashboard.css';
 
 delete L.Icon.Default.prototype._getIconUrl;
@@ -17,68 +18,96 @@ L.Icon.Default.mergeOptions({
 });
 
 const timeAgo = (dateStr) => {
-  if (!dateStr) return 'Just now';
-  const diff = Math.floor((new Date() - new Date(dateStr)) / 60000);
+  const date = new Date(dateStr);
+  if (!dateStr || Number.isNaN(date.getTime())) return 'Unknown time';
+  const diff = Math.floor((Date.now() - date.getTime()) / 60000);
   if (diff < 1) return 'Just now';
   if (diff < 60) return `${diff} min ago`;
   return `${Math.floor(diff / 60)} hrs ago`;
 };
 
+const formatTimestamp = (timestamp) => {
+  const date = new Date(timestamp);
+  if (!timestamp || Number.isNaN(date.getTime())) return 'Unknown time';
+
+  return new Intl.DateTimeFormat('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+};
+
+const formatDamageType = (eventType) => String(eventType || 'other')
+  .replaceAll('_', ' ')
+  .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+const getMarkerIcon = (event) => {
+  const colors = {
+    critical: '#ef4444',
+    high: '#f97316',
+    medium: '#eab308',
+    low: '#22c55e',
+  };
+  const color = colors[event.severity] || colors.low;
+
+  return L.divIcon({
+    className: 'custom-map-marker',
+    html: `<div style="background-color: ${color}; width: 14px; height: 14px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 4px rgba(0,0,0,0.4);"></div>`,
+    iconSize: [14, 14],
+    iconAnchor: [7, 7],
+  });
+};
+
 const Dashboard = () => {
   const [events, setEvents] = useState([]);
   const [isLive, setIsLive] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState('map');
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [liveAlert, setLiveAlert] = useState(null);
   const [mapTheme, setMapTheme] = useState(() => localStorage.getItem('urbaneye_map_theme') || 'light');
 
-  const getMarkerIcon = (event) => {
-    let color = 'var(--text-tertiary)'; // default grey
-    if (event.status === 'repaired') {
-      color = 'var(--color-repaired)';
-    } else if (event.status === 'dispatched') {
-      color = 'var(--color-info)';
-    } else if (event.severity === 'critical') {
-      color = 'var(--color-critical)';
-    } else if (event.severity === 'high' || event.severity === 'medium' || event.status === 'pending') {
-      color = 'var(--color-pending)';
-    }
-    
-    return L.divIcon({
-      className: 'custom-map-marker',
-      html: `<div style="background-color: ${color}; width: 14px; height: 14px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 4px rgba(0,0,0,0.4);"></div>`,
-      iconSize: [14, 14],
-      iconAnchor: [7, 7]
-    });
-  };
-
-  const prevEventCount = useRef(0);
-
-  const fetchEvents = async () => {
-    try {
-      const res = await fetch('http://localhost:8000/events');
-      if (res.ok) {
-        const data = await res.json();
-        setEvents(data);
-        setIsLive(true);
-
-        if (prevEventCount.current > 0 && data.length > prevEventCount.current) {
-          const newest = data[0];
-          setLiveAlert(newest);
-        }
-        prevEventCount.current = data.length;
-      } else {
-        setIsLive(false);
-      }
-    } catch (err) {
-      setIsLive(false);
-    }
-  };
+  const previousEventIds = useRef(new Set());
 
   useEffect(() => {
+    const controller = new AbortController();
+    let isMounted = true;
+
+    const fetchEvents = async () => {
+      try {
+        const data = await getEvents({ signal: controller.signal });
+        if (!isMounted) return;
+
+        const newCriticalEvent = previousEventIds.current.size
+          ? data.find((event) => (
+            event.severity === 'critical' && !previousEventIds.current.has(event.id)
+          ))
+          : null;
+
+        setEvents(data);
+        setIsLive(true);
+        setError('');
+        if (newCriticalEvent) setLiveAlert(newCriticalEvent);
+        previousEventIds.current = new Set(data.map((event) => event.id));
+      } catch (requestError) {
+        if (requestError?.name === 'AbortError' || !isMounted) return;
+        setIsLive(false);
+        setError('Live incident data is temporarily unavailable. Please try again shortly.');
+      } finally {
+        if (isMounted) setIsLoading(false);
+      }
+    };
+
     fetchEvents();
-    const interval = setInterval(fetchEvents, 2000);
-    return () => clearInterval(interval);
+    const interval = setInterval(fetchEvents, 15_000);
+    return () => {
+      isMounted = false;
+      controller.abort();
+      clearInterval(interval);
+    };
   }, []);
 
   const handleMapThemeToggle = (mode) => {
@@ -86,27 +115,14 @@ const Dashboard = () => {
     localStorage.setItem('urbaneye_map_theme', mode);
   };
 
-  const handleUpdateStatus = async (eventId, newStatus) => {
-    try {
-      const res = await fetch(`http://localhost:8000/events/${eventId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus })
-      });
-      if (res.ok) {
-        const updated = await res.json();
-        setEvents(prev => prev.map(e => e.id === eventId ? updated : e));
-        if (selectedEvent && selectedEvent.id === eventId) {
-          setSelectedEvent(updated);
-        }
-      }
-    } catch (err) {
-      console.error('Failed to update status:', err);
-    }
+  const handleUpdateStatus = () => {
+    setError('Incident status updates are not available from the backend yet.');
   };
 
   const criticalEvents = events.filter(e => e.severity === 'critical').length;
-  const pendingWorkOrders = events.filter(e => e.status === 'pending').length;
+  const potholeCount = events.filter(e => e.event_type === 'pothole').length;
+  const crackCount = events.filter(e => e.event_type.includes('crack')).length;
+  const mapEvents = events.filter(hasValidCoordinates);
 
   const mapTileUrl = mapTheme === 'light'
     ? 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}'
@@ -121,7 +137,7 @@ const Dashboard = () => {
             <div className="alert-icon-pulse"><AlertTriangle size={22} /></div>
             <div className="alert-text">
               <strong>🚨 CRITICAL HAZARD DETECTED IN REAL-TIME</strong>
-              <p>{liveAlert.event_type?.toUpperCase()} recorded at {liveAlert.location_name || 'Mumbai Telemetry Stream'}</p>
+              <p>{formatDamageType(liveAlert.event_type)} recorded by {liveAlert.source}</p>
             </div>
           </div>
           <div className="alert-actions">
@@ -180,7 +196,7 @@ const Dashboard = () => {
                   border: `1px solid ${isLive ? 'rgba(16, 185, 129, 0.3)' : 'rgba(229, 62, 62, 0.3)'}`
                 }}>
                   <span className="pulse-dot" style={{ background: isLive ? 'var(--color-repaired)' : 'var(--color-critical)' }}></span>
-                  {isLive ? 'Edge Network Synchronized' : 'Offline'}
+                  {isLive ? 'Live' : 'Offline'}
                 </div>
               </h1>
               <p className="dashboard-subtitle swipe-from-left delay-200" style={{ fontSize: '1.2rem', marginTop: '1rem', maxWidth: '600px' }}>
@@ -189,6 +205,12 @@ const Dashboard = () => {
             </div>
           </div>
         </header>
+
+        {error && (
+          <div className="dashboard-data-message dashboard-error-message" role="alert">
+            {error}
+          </div>
+        )}
 
         {/* View 1: Live Event Map & Work Orders */}
         {activeTab === 'map' && (
@@ -207,15 +229,15 @@ const Dashboard = () => {
               </div>
               <div className="stat-card glass-panel stat-card-pending tilt-in delay-400">
                 <div className="stat-icon-wrapper"><Wrench size={20} style={{ color: 'var(--color-pending)' }} /></div>
-                <span className="stat-value" style={{ color: 'var(--color-pending)' }}>{pendingWorkOrders}</span>
-                <span className="stat-label">Pending PWD Work Orders</span>
+                <span className="stat-value" style={{ color: 'var(--color-pending)' }}>{potholeCount}</span>
+                <span className="stat-label">Pothole Hazards</span>
               </div>
               <div className="stat-card glass-panel stat-card-repaired tilt-in delay-500">
                 <div className="stat-icon-wrapper"><CheckCircle size={20} style={{ color: 'var(--color-repaired)' }} /></div>
                 <span className="stat-value" style={{ color: 'var(--color-repaired)' }}>
-                  {events.filter(e => e.status === 'repaired').length}
+                  {crackCount}
                 </span>
-                <span className="stat-label">Repaired / Certified</span>
+                <span className="stat-label">Crack Hazards</span>
               </div>
             </section>
 
@@ -249,10 +271,10 @@ const Dashboard = () => {
 
                   <div className="map-container-wrapper" style={{ position: 'relative' }}>
                     <div className="map-legend glass-panel" style={{ position: 'absolute', bottom: '20px', right: '20px', zIndex: 1000, padding: '0.8rem', borderRadius: '12px', fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', fontWeight: 600 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><span style={{ width: '10px', height: '10px', borderRadius: '50%', background: 'var(--color-critical)' }}></span> Critical</div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><span style={{ width: '10px', height: '10px', borderRadius: '50%', background: 'var(--color-pending)' }}></span> High / Pending</div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><span style={{ width: '10px', height: '10px', borderRadius: '50%', background: 'var(--color-info)' }}></span> Dispatched</div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><span style={{ width: '10px', height: '10px', borderRadius: '50%', background: 'var(--color-repaired)' }}></span> Repaired</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><span style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#ef4444' }}></span> Critical</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><span style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#f97316' }}></span> High</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><span style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#eab308' }}></span> Medium</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><span style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#22c55e' }}></span> Low</div>
                     </div>
                   <MapContainer center={[19.076, 72.8777]} zoom={12} scrollWheelZoom className="leaflet-map">
                     <TileLayer
@@ -260,16 +282,16 @@ const Dashboard = () => {
                       attribution='&copy; OpenStreetMap contributors'
                       url={mapTileUrl}
                     />
-                    {events.map((event) => (
+                    {mapEvents.map((event) => (
                       <Marker key={event.id} position={[event.latitude, event.longitude]} icon={getMarkerIcon(event)}>
                         <Popup className="custom-popup">
                           <div className="popup-card">
-                            <strong className="popup-title text-capitalize">{event.event_type}</strong>
+                            <strong className="popup-title text-capitalize">{formatDamageType(event.event_type)}</strong>
                             <div className="popup-meta">
                               <span>Confidence: {(event.confidence * 100).toFixed(0)}%</span>
-                              <span className={`status-pill status-${event.status}`}>{event.status?.toUpperCase()}</span>
+                              <span className={`badge badge-${event.severity}`}>{event.severity.toUpperCase()}</span>
                             </div>
-                            <p className="popup-loc">{event.location_name || 'Mumbai Central Corridor'}</p>
+                            <p className="popup-loc">{formatTimestamp(event.timestamp)}</p>
                             <button 
                               className="popup-inspect-btn"
                               onClick={() => setSelectedEvent(event)}
@@ -281,6 +303,11 @@ const Dashboard = () => {
                       </Marker>
                     ))}
                   </MapContainer>
+                  {!isLoading && mapEvents.length === 0 && (
+                    <div className="map-empty-state">
+                      No mappable incident coordinates are available.
+                    </div>
+                  )}
                 </div>
               </section>
 
@@ -291,6 +318,15 @@ const Dashboard = () => {
                   <span className="feed-count">{events.length} Events</span>
                 </div>
                 <div className="feed-list">
+                  {isLoading && events.length === 0 && (
+                    <div className="dashboard-state-message" role="status">
+                      <span className="dashboard-loading-spinner" aria-hidden="true" />
+                      Loading live incidents…
+                    </div>
+                  )}
+                  {!isLoading && events.length === 0 && (
+                    <div className="dashboard-state-message">No incidents have been logged yet.</div>
+                  )}
                   {events.map(event => (
                     <div 
                       key={event.id} 
@@ -304,10 +340,10 @@ const Dashboard = () => {
                         </div>
                         <div style={{ flex: 1 }}>
                           <div className="feed-item-top">
-                            <span className="feed-type text-capitalize" style={{ fontSize: '0.9rem' }}>{event.event_type}</span>
+                            <span className="feed-type text-capitalize" style={{ fontSize: '0.9rem' }}>{formatDamageType(event.event_type)}</span>
                             <span className={`badge badge-${event.severity}`}>{event.severity?.toUpperCase()}</span>
                           </div>
-                          <p className="feed-loc">{event.location_name || 'Mumbai Road Segment'}</p>
+                          <p className="feed-loc">Source: {event.source}</p>
                           <div className="feed-item-bottom">
                             <span className="feed-time">{event.timestamp ? timeAgo(event.timestamp) : 'Just now'} &bull; {(event.confidence * 100).toFixed(0)}% Match</span>
                             <span className={`badge badge-${event.status}`}>{event.status}</span>
@@ -326,8 +362,9 @@ const Dashboard = () => {
         {activeTab === 'analytics' && (
           <MunicipalAnalytics 
             events={events} 
-            onUpdateStatus={handleUpdateStatus} 
             onSelectEvent={(event) => setSelectedEvent(event)} 
+            isLoading={isLoading}
+            error={error}
           />
         )}
       </main>

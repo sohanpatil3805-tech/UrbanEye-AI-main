@@ -7,6 +7,9 @@ import 'package:urbaneye_mobile/services/location_service.dart';
 import 'package:urbaneye_mobile/widgets/urbaneye_design_system.dart';
 
 void main() {
+  setUp(() => LocationStore.latestPosition = null);
+  tearDown(() => LocationStore.latestPosition = null);
+
   testWidgets('Live GPS stays ready until tracking is started', (
     WidgetTester tester,
   ) async {
@@ -46,6 +49,8 @@ void main() {
 
     expect(locationService.requestPermissionCalls, 1);
     expect(locationService.getCurrentPositionCalls, 1);
+    expect(LocationStore.latestPosition?.latitude, 28.6139);
+    expect(LocationStore.latestPosition?.longitude, 77.2090);
     expect(find.text('TRACKING'), findsNWidgets(2));
     expect(find.text('Stop Tracking'), findsOneWidget);
     expect(find.text('28.613900\u00b0 N, 77.209000\u00b0 E'), findsOneWidget);
@@ -57,6 +62,8 @@ void main() {
     await tester.pump();
 
     expect(locationService.getCurrentPositionCalls, 2);
+    expect(LocationStore.latestPosition?.latitude, 28.6140);
+    expect(LocationStore.latestPosition?.longitude, 77.2091);
     expect(find.text('28.614000\u00b0 N, 77.209100\u00b0 E'), findsOneWidget);
 
     await _tapTrackingControl(tester, 'Stop Tracking');
@@ -69,6 +76,7 @@ void main() {
     await tester.pump(const Duration(seconds: 6));
 
     expect(locationService.getCurrentPositionCalls, callsAfterStopping);
+    expect(LocationStore.latestPosition?.latitude, 28.6140);
   });
 
   testWidgets('disabled services and denied permission show actionable states',

@@ -134,6 +134,7 @@ class _LiveGpsScreenState extends State<LiveGpsScreen> {
         return;
       }
 
+      LocationStore.latestPosition = position;
       setState(() {
         _position = position;
         _lastUpdated = DateTime.now();

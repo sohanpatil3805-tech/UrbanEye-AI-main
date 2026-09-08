@@ -101,7 +101,7 @@ void main() {
     expect(find.text('Camera'), findsOneWidget);
   });
 
-  testWidgets('Camera route shows the preview dashboard and returns home', (
+  testWidgets('Camera route handles an unavailable camera and returns home', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(const UrbanEyeApp());
@@ -123,18 +123,18 @@ void main() {
       find.text('Front camera preview and capture controls.'),
       findsOneWidget,
     );
-    expect(find.text('PREVIEW'), findsOneWidget);
-    expect(find.text('Camera preview'), findsOneWidget);
+    expect(find.text('UNAVAILABLE'), findsOneWidget);
+    expect(find.text('Camera unavailable'), findsOneWidget);
     expect(
-      find.text('Camera access will be added in a future update.'),
+      find.text('Check that a camera is available and not in use by another app.'),
       findsOneWidget,
     );
     expect(find.text('PREVIEW MODE'), findsOneWidget);
-    expect(find.byTooltip('Capture'), findsOneWidget);
+    expect(find.byTooltip('Camera unavailable'), findsOneWidget);
     expect(find.text('Flash'), findsOneWidget);
     expect(find.text('Gallery'), findsOneWidget);
     expect(
-      find.text('Camera controls are disabled in this preview.'),
+      find.text('Resolve camera access above, then try again.'),
       findsOneWidget,
     );
 

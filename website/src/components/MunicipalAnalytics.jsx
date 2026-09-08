@@ -1,9 +1,26 @@
 import React, { useState } from 'react';
-import { BarChart2, PieChart, FileSpreadsheet, TrendingUp, AlertTriangle, ShieldCheck, IndianRupee, Clock, ChevronRight } from 'lucide-react';
+import { BarChart2, PieChart, FileSpreadsheet, TrendingUp, AlertTriangle, ShieldCheck, IndianRupee, Clock } from 'lucide-react';
 import AuditReportModal from './AuditReportModal';
 import './MunicipalAnalytics.css';
 
-const MunicipalAnalytics = ({ events, onUpdateStatus, onSelectEvent }) => {
+const formatDamageType = (eventType) => String(eventType || 'other')
+  .replaceAll('_', ' ')
+  .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+const formatTimestamp = (timestamp) => {
+  const date = new Date(timestamp);
+  if (!timestamp || Number.isNaN(date.getTime())) return 'Unknown time';
+
+  return new Intl.DateTimeFormat('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+};
+
+const MunicipalAnalytics = ({ events, onSelectEvent, isLoading, error }) => {
   const [showReportModal, setShowReportModal] = useState(false);
 
   // Compute metrics
@@ -13,18 +30,19 @@ const MunicipalAnalytics = ({ events, onUpdateStatus, onSelectEvent }) => {
   const mediumCount = events.filter(e => e.severity === 'medium').length;
   const lowCount = events.filter(e => e.severity === 'low' || !e.severity).length;
 
-  const pendingCount = events.filter(e => e.status === 'pending').length;
   const dispatchedCount = events.filter(e => e.status === 'dispatched').length;
   const repairedCount = events.filter(e => e.status === 'repaired').length;
+  const activeHazards = events.filter(e => e.status !== 'repaired').length;
 
   // Estimated PWD budget (₹ 1.25 Lakhs per high/critical pothole, 0.4 Lakhs per low/medium)
   const estBudgetLakhs = ((criticalCount + highCount) * 1.25 + (mediumCount + lowCount) * 0.45).toFixed(2);
 
-  // Hazard type counts
+  // Hazard type counts from the road-damage model.
   const potholes = events.filter(e => e.event_type === 'pothole').length;
-  const cracks = events.filter(e => e.event_type === 'crack').length;
-  const speedbreakers = events.filter(e => e.event_type === 'speedbreaker').length;
-  const debris = events.filter(e => e.event_type === 'debris').length;
+  const cracks = events.filter(e => e.event_type.includes('crack')).length;
+  const longitudinalCracks = events.filter(e => e.event_type === 'longitudinal_crack').length;
+  const transverseCracks = events.filter(e => e.event_type === 'transverse_crack').length;
+  const alligatorCracks = events.filter(e => e.event_type === 'alligator_crack').length;
 
   return (
     <div className="analytics-section">
@@ -53,8 +71,8 @@ const MunicipalAnalytics = ({ events, onUpdateStatus, onSelectEvent }) => {
           </div>
           <div className="kpi-content">
             <span className="kpi-label">Active Hazards</span>
-            <span className="kpi-value">{events.filter(e => e.status !== 'repaired').length}</span>
-            <span className="kpi-subtext">3 Critical Action Required</span>
+            <span className="kpi-value">{activeHazards}</span>
+            <span className="kpi-subtext">{criticalCount} Critical Action Required</span>
           </div>
         </div>
 
@@ -64,8 +82,8 @@ const MunicipalAnalytics = ({ events, onUpdateStatus, onSelectEvent }) => {
           </div>
           <div className="kpi-content">
             <span className="kpi-label">Est. Maintenance Cost</span>
-            <span className="kpi-value">₹ 7.15 L</span>
-            <span className="kpi-subtext">PWD Allocated Fund Pool</span>
+            <span className="kpi-value">₹ {estBudgetLakhs} L</span>
+            <span className="kpi-subtext">Derived from live hazard severity</span>
           </div>
         </div>
 
@@ -75,8 +93,8 @@ const MunicipalAnalytics = ({ events, onUpdateStatus, onSelectEvent }) => {
           </div>
           <div className="kpi-content">
             <span className="kpi-label">Avg Repair SLA</span>
-            <span className="kpi-value">4.2 Hrs</span>
-            <span className="kpi-subtext">88% Within Target SLA</span>
+            <span className="kpi-value">N/A</span>
+            <span className="kpi-subtext">Repair timing is not yet reported</span>
           </div>
         </div>
 
@@ -149,15 +167,15 @@ const MunicipalAnalytics = ({ events, onUpdateStatus, onSelectEvent }) => {
             <div className="summary-item">
               <span className="dot dot-green"></span>
               <div className="summary-info">
-                <span className="sum-title">Speedbreakers</span>
-                <span className="sum-count">{speedbreakers} Events</span>
+                <span className="sum-title">Longitudinal Cracks</span>
+                <span className="sum-count">{longitudinalCracks} Events</span>
               </div>
             </div>
             <div className="summary-item">
               <span className="dot dot-purple"></span>
               <div className="summary-info">
-                <span className="sum-title">Debris</span>
-                <span className="sum-count">{debris} Events</span>
+                <span className="sum-title">Transverse / Alligator</span>
+                <span className="sum-count">{transverseCracks + alligatorCracks} Events</span>
               </div>
             </div>
           </div>
@@ -166,37 +184,37 @@ const MunicipalAnalytics = ({ events, onUpdateStatus, onSelectEvent }) => {
 
       {/* Corridors Table */}
       <div className="corridor-table-card glass-panel fade-in-up delay-700">
-        <h3>Highest Risk Corridors</h3>
+        <h3>Live Incident Register</h3>
         <div className="table-wrapper">
           <table className="corridor-table">
             <thead>
               <tr>
                 <th>ID</th>
-                <th>Location / Segment</th>
-                <th>Classification</th>
+                <th>Time</th>
+                <th>Damage Type</th>
                 <th>Confidence</th>
                 <th>Severity</th>
                 <th>Status</th>
-                <th>Action</th>
               </tr>
             </thead>
             <tbody>
+              {isLoading && events.length === 0 && (
+                <tr><td colSpan="6" className="dashboard-table-state">Loading live incidents…</td></tr>
+              )}
+              {!isLoading && error && events.length === 0 && (
+                <tr><td colSpan="6" className="dashboard-table-state">{error}</td></tr>
+              )}
+              {!isLoading && !error && events.length === 0 && (
+                <tr><td colSpan="6" className="dashboard-table-state">No incidents have been logged yet.</td></tr>
+              )}
               {events.map((event) => (
                 <tr key={event.id} onClick={() => onSelectEvent(event)} className="clickable-row">
                   <td className="font-mono text-cyan">#UE-{event.id}</td>
-                  <td>{event.location_name || 'Mumbai Central Corridor'}</td>
-                  <td className="text-capitalize font-bold">{event.event_type}</td>
+                  <td>{formatTimestamp(event.timestamp)}</td>
+                  <td className="text-capitalize font-bold">{formatDamageType(event.event_type)}</td>
                   <td>{(event.confidence * 100).toFixed(0)}%</td>
                   <td><span className={`severity-badge severity-${event.severity}`}>{event.severity?.toUpperCase()}</span></td>
                   <td><span className={`status-pill status-${event.status}`}>{event.status?.toUpperCase()}</span></td>
-                  <td>
-                    <button 
-                      className="table-inspect-btn"
-                      onClick={(e) => { e.stopPropagation(); onSelectEvent(event); }}
-                    >
-                      Inspect AI Telemetry <ChevronRight size={14} />
-                    </button>
-                  </td>
                 </tr>
               ))}
             </tbody>

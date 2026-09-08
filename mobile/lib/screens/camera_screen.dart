@@ -3,9 +3,13 @@ import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 
 import '../services/api_service.dart';
+import '../services/detection_result_service.dart';
+import '../services/location_service.dart';
 import '../widgets/urbaneye_design_system.dart';
+import 'result_screen.dart';
 
 class CameraScreen extends StatefulWidget {
   const CameraScreen({this.apiService, super.key});
@@ -24,6 +28,7 @@ class _CameraScreenState extends State<CameraScreen>
   late final bool _ownsApiService;
   CameraController? _cameraController;
   Uint8List? _capturedPhoto;
+  Position? _capturedPosition;
   _CameraUiState _cameraState = _CameraUiState.loading;
   bool _isCapturing = false;
   bool _isUploading = false;
@@ -34,7 +39,7 @@ class _CameraScreenState extends State<CameraScreen>
   void initState() {
     super.initState();
     _ownsApiService = widget.apiService == null;
-    _apiService = widget.apiService ?? ApiService();
+    _apiService = widget.apiService ?? DetectionResultService();
     WidgetsBinding.instance.addObserver(this);
     unawaited(_initializeCamera());
   }
@@ -164,6 +169,7 @@ class _CameraScreenState extends State<CameraScreen>
 
     try {
       final photo = await controller.takePicture();
+      final capturedPosition = LocationStore.latestPosition;
       final photoBytes = await photo.readAsBytes();
 
       if (!mounted || controller != _cameraController) {
@@ -183,6 +189,7 @@ class _CameraScreenState extends State<CameraScreen>
 
       setState(() {
         _capturedPhoto = photoBytes;
+        _capturedPosition = capturedPosition;
         _isCapturing = false;
       });
     } on CameraException catch (error) {
@@ -220,6 +227,7 @@ class _CameraScreenState extends State<CameraScreen>
 
     setState(() {
       _capturedPhoto = null;
+      _capturedPosition = null;
     });
 
     final controller = _cameraController;
@@ -267,10 +275,27 @@ class _CameraScreenState extends State<CameraScreen>
     });
 
     if (uploadSucceeded) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Upload Successful')),
+      final service = _apiService;
+      final result = service is DetectionResultService ? service.result : null;
+      if (result == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Unable to read detection results.')),
+        );
+        return;
+      }
+
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (context) => ResultScreen(
+            photoBytes: capturedPhoto,
+            result: result,
+            position: _capturedPosition,
+          ),
+        ),
       );
-      Navigator.of(context).maybePop();
+      if (mounted) {
+        await _retakePhoto();
+      }
       return;
     }
 

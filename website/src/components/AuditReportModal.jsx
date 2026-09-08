@@ -11,6 +11,9 @@ const AuditReportModal = ({ events, estBudgetLakhs, onClose }) => {
 
   const criticalCount = events.filter(e => e.severity === 'critical').length;
   const highCount = events.filter(e => e.severity === 'high').length;
+  const averageConfidence = events.length
+    ? (events.reduce((total, event) => total + event.confidence, 0) / events.length) * 100
+    : 0;
 
   const handlePrint = () => {
     window.print();
@@ -81,7 +84,7 @@ const AuditReportModal = ({ events, estBudgetLakhs, onClose }) => {
               </div>
               <div className="report-grid-cell">
                 <span className="rg-label">AI Edge Detection Accuracy</span>
-                <span className="rg-val">94.8% Avg</span>
+                <span className="rg-val">{averageConfidence.toFixed(1)}% Avg</span>
               </div>
             </div>
           </section>
@@ -92,10 +95,10 @@ const AuditReportModal = ({ events, estBudgetLakhs, onClose }) => {
               <thead>
                 <tr>
                   <th>Audit ID</th>
-                  <th>Location Corridor</th>
+                  <th>Coordinates</th>
                   <th>Hazard Class</th>
                   <th>Severity</th>
-                  <th>Depth (cm)</th>
+                  <th>Source</th>
                   <th>Work Order Status</th>
                 </tr>
               </thead>
@@ -103,10 +106,12 @@ const AuditReportModal = ({ events, estBudgetLakhs, onClose }) => {
                 {events.map(event => (
                   <tr key={event.id}>
                     <td className="font-mono">UE-{event.id}</td>
-                    <td>{event.location_name || 'Mumbai Road Segment'}</td>
+                    <td>{Number.isFinite(event.latitude) && Number.isFinite(event.longitude)
+                      ? `${event.latitude.toFixed(4)}, ${event.longitude.toFixed(4)}`
+                      : 'Not available'}</td>
                     <td style={{textTransform: 'capitalize'}}>{event.event_type}</td>
                     <td>{event.severity?.toUpperCase()}</td>
-                    <td>{event.depth_cm || 5.0} cm</td>
+                    <td>{event.source || 'Not available'}</td>
                     <td>{event.status?.toUpperCase()}</td>
                   </tr>
                 ))}

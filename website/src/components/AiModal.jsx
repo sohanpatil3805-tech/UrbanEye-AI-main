@@ -1,42 +1,32 @@
 import React from 'react';
-import { X, Cpu, Activity, AlertTriangle, ShieldCheck, MapPin, Gauge, Layers, Eye } from 'lucide-react';
+import { X, Cpu, Activity, AlertTriangle, ShieldCheck, MapPin, Layers, Eye } from 'lucide-react';
 import './AiModal.css';
 
 const AiModal = ({ event, onClose, onUpdateStatus }) => {
   if (!event) return null;
 
-  const telemetry = event.telemetry || [
-    { t: 0, x: 0.1, y: 0.98, z: 0.12 },
-    { t: 1, x: 0.35, y: 1.15, z: 0.28 },
-    { t: 2, x: 1.8, y: 3.84, z: 2.91 },
-    { t: 3, x: 0.3, y: 1.1, z: 0.25 },
-    { t: 4, x: 0.08, y: 0.99, z: 0.1 }
-  ];
+  const telemetry = Array.isArray(event.telemetry) ? event.telemetry : [];
 
   // Calculate SVG line paths for Accelerometer X, Y, Z
   const svgWidth = 400;
   const svgHeight = 140;
   const maxVal = 5.0; // scale up to 5g
 
-  const pointsX = telemetry.map((pt, idx) => {
+  const pointsFor = (axis) => telemetry.length > 1 ? telemetry.map((pt, idx) => {
     const x = (idx / (telemetry.length - 1)) * (svgWidth - 40) + 20;
-    const y = svgHeight - 20 - (pt.x / maxVal) * (svgHeight - 40);
+    const y = svgHeight - 20 - ((Number(pt[axis]) || 0) / maxVal) * (svgHeight - 40);
     return `${x},${y}`;
-  }).join(' ');
+  }).join(' ') : '';
 
-  const pointsY = telemetry.map((pt, idx) => {
-    const x = (idx / (telemetry.length - 1)) * (svgWidth - 40) + 20;
-    const y = svgHeight - 20 - (pt.y / maxVal) * (svgHeight - 40);
-    return `${x},${y}`;
-  }).join(' ');
-
-  const pointsZ = telemetry.map((pt, idx) => {
-    const x = (idx / (telemetry.length - 1)) * (svgWidth - 40) + 20;
-    const y = svgHeight - 20 - (pt.z / maxVal) * (svgHeight - 40);
-    return `${x},${y}`;
-  }).join(' ');
-
-  const peakY = Math.max(...telemetry.map(t => t.y)).toFixed(2);
+  const pointsX = pointsFor('x');
+  const pointsY = pointsFor('y');
+  const pointsZ = pointsFor('z');
+  const peakY = telemetry.length
+    ? Math.max(...telemetry.map((point) => Number(point.y) || 0)).toFixed(2)
+    : 'N/A';
+  const coordinates = Number.isFinite(event.latitude) && Number.isFinite(event.longitude)
+    ? `${event.latitude.toFixed(4)}, ${event.longitude.toFixed(4)}`
+    : 'Not available';
 
   return (
     <div className="ai-modal-overlay" onClick={onClose}>
@@ -45,7 +35,7 @@ const AiModal = ({ event, onClose, onUpdateStatus }) => {
           <div className="ai-title-wrap">
             <div className="ai-badge">
               <Cpu size={18} className="ai-icon-pulse" />
-              <span>YOLOv8 AI Telemetry</span>
+              <span>AI Detection Telemetry</span>
             </div>
             <h2>Detection #UE-{event.id}</h2>
           </div>
@@ -86,20 +76,19 @@ const AiModal = ({ event, onClose, onUpdateStatus }) => {
               </div>
 
               <div className="hud-overlay">
-                <span className="hud-stat">GPS: {event.latitude?.toFixed(4)}, {event.longitude?.toFixed(4)}</span>
-                <span className="hud-stat">Model: YOLOv8s-Road-v2</span>
-                <span className="hud-stat">FPS: 60 (Edge TPU)</span>
+                <span className="hud-stat">GPS: {coordinates}</span>
+                <span className="hud-stat">Source: {event.source || 'Not reported'}</span>
               </div>
             </div>
 
             <div className="cv-metrics-row">
               <div className="metric-chip">
                 <span className="m-label">Est. Depth</span>
-                <span className="m-val">{event.depth_cm || 6.4} cm</span>
+                <span className="m-val">{event.depth_cm ?? 'N/A'}{event.depth_cm != null ? ' cm' : ''}</span>
               </div>
               <div className="metric-chip">
                 <span className="m-label">Vehicle Speed</span>
-                <span className="m-val">{event.speed_kmh || 42} km/h</span>
+                <span className="m-val">{event.speed_kmh ?? 'N/A'}{event.speed_kmh != null ? ' km/h' : ''}</span>
               </div>
               <div className="metric-chip">
                 <span className="m-label">Classification</span>
@@ -124,9 +113,17 @@ const AiModal = ({ event, onClose, onUpdateStatus }) => {
                 <line x1="0" y1="100" x2={svgWidth} y2="100" stroke="rgba(255,255,255,0.05)" strokeDasharray="4 4" />
                 
                 {/* Waveform Lines */}
-                <polyline fill="none" stroke="#FF5F56" strokeWidth="2" points={pointsX} opacity="0.8" />
-                <polyline fill="none" stroke="#00F0FF" strokeWidth="2.5" points={pointsY} />
-                <polyline fill="none" stroke="#27C93F" strokeWidth="2" points={pointsZ} opacity="0.8" />
+                {telemetry.length > 1 ? (
+                  <>
+                    <polyline fill="none" stroke="#FF5F56" strokeWidth="2" points={pointsX} opacity="0.8" />
+                    <polyline fill="none" stroke="#00F0FF" strokeWidth="2.5" points={pointsY} />
+                    <polyline fill="none" stroke="#27C93F" strokeWidth="2" points={pointsZ} opacity="0.8" />
+                  </>
+                ) : (
+                  <text x={svgWidth / 2} y={svgHeight / 2} textAnchor="middle" fill="rgba(255,255,255,0.55)" fontSize="13">
+                    Telemetry not reported by backend
+                  </text>
+                )}
               </svg>
 
               <div className="legend-row">
@@ -140,7 +137,7 @@ const AiModal = ({ event, onClose, onUpdateStatus }) => {
             <div className="details-grid">
               <div className="detail-item">
                 <span className="d-label"><MapPin size={14} /> Location</span>
-                <span className="d-val">{event.location_name || 'Mumbai Urban Road Segment'}</span>
+                <span className="d-val">{coordinates}</span>
               </div>
               <div className="detail-item">
                 <span className="d-label"><AlertTriangle size={14} /> Severity Rating</span>
@@ -148,7 +145,7 @@ const AiModal = ({ event, onClose, onUpdateStatus }) => {
               </div>
               <div className="detail-item">
                 <span className="d-label"><Layers size={14} /> Mobile Sensor ID</span>
-                <span className="d-val font-mono">{event.device_id || 'MOB-SENSOR-980'}</span>
+                <span className="d-val font-mono">{event.device_id || 'Not reported'}</span>
               </div>
               <div className="detail-item">
                 <span className="d-label"><ShieldCheck size={14} /> Verification Status</span>

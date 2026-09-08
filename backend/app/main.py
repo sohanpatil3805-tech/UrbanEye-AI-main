@@ -1,9 +1,11 @@
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from PIL import Image, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
 
 from .models import EventPayload, EventResponse, LocationPayload, UploadResponse
@@ -41,10 +43,22 @@ app = FastAPI(
 locations: list[LocationPayload] = []
 events: list[EventResponse] = []
 
+_DETECTION_EVENT_TYPES = {
+    "Longitudinal Crack": "longitudinal_crack",
+    "Transverse Crack": "transverse_crack",
+    "Alligator Crack": "alligator_crack",
+    "Pothole": "pothole",
+}
+
 
 @app.get("/", tags=["Health"])
 def root() -> dict[str, str]:
     return {"message": "UrbanEye AI backend running"}
+
+
+@app.get("/health", tags=["Health"])
+def health() -> dict[str, str]:
+    return {"status": "healthy"}
 
 
 @app.post("/location", tags=["Telemetry"])
@@ -55,15 +69,26 @@ def ingest_location(payload: LocationPayload) -> dict[str, str]:
 
 
 @app.post("/detect", tags=["Vision"])
-async def upload_for_detection(file: UploadFile = File(...)) -> dict[str, object]:
+async def upload_for_detection(
+    file: UploadFile = File(...),
+    latitude: float | None = Form(default=None, ge=-90, le=90),
+    longitude: float | None = Form(default=None, ge=-180, le=180),
+) -> dict[str, object]:
     uploads_dir = Path("uploads")
     extension = Path(file.filename or "").suffix.lower()
     filename = f"{datetime.now():%Y%m%d_%H%M%S_%f}{extension}"
     destination = uploads_dir / filename
 
     try:
+        content = await file.read()
+        with Image.open(BytesIO(content)) as image:
+            image.verify()
         uploads_dir.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(await file.read())
+        destination.write_bytes(content)
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422, detail="Uploaded file must be a valid image."
+        ) from exc
     except Exception as exc:
         logger.exception("Unable to save detection upload")
         raise HTTPException(
@@ -93,10 +118,40 @@ async def upload_for_detection(file: UploadFile = File(...)) -> dict[str, object
             status_code=500, detail="Unable to process image for detection."
         ) from exc
 
+    if (latitude is None) != (longitude is None):
+        raise HTTPException(
+            status_code=422,
+            detail="latitude and longitude must be provided together.",
+        )
+
+    if latitude is None and locations:
+        latest_location = locations[-1]
+        latitude = latest_location.latitude
+        longitude = latest_location.longitude
+
+    incidents: list[EventResponse] = []
+    if latitude is not None and longitude is not None:
+        for detection in detections:
+            event_type = _DETECTION_EVENT_TYPES.get(str(detection["label"]))
+            if event_type is None:
+                continue
+            event = EventResponse(
+                id=len(events) + 1,
+                event_type=event_type,
+                confidence=float(detection["confidence"]),
+                latitude=latitude,
+                longitude=longitude,
+                source="camera",
+            )
+            events.append(event)
+            incidents.append(event)
+            publish_event_placeholder(event.model_dump())
+
     return {
         "status": "success",
         "filename": filename,
         "detections": detections,
+        "incidents": [incident.model_dump(mode="json") for incident in incidents],
     }
 
 
