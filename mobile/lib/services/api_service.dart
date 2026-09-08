@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -107,13 +108,32 @@ class ApiService {
   }
 
   /// Uploads a captured image to the detection endpoint as multipart data.
+  ///
+  /// Backwards-compatible convenience method that returns true on success.
   Future<bool> uploadDetectionImage({
     required Uint8List imageBytes,
     String filename = 'capture.jpg',
     Future<void>? abortTrigger,
   }) async {
+    final result = await detectDamage(
+      imageBytes: imageBytes,
+      filename: filename,
+      abortTrigger: abortTrigger,
+    );
+    return result is DetectionSuccess;
+  }
+
+  /// Sends a captured image to the /detect endpoint and returns structured
+  /// detection results or user-friendly error details.
+  Future<DetectionResult> detectDamage({
+    required Uint8List imageBytes,
+    String filename = 'capture.jpg',
+    Future<void>? abortTrigger,
+  }) async {
     if (imageBytes.isEmpty) {
-      return false;
+      return const DetectionFailure(
+        userMessage: 'No image data captured. Please take a photo to continue.',
+      );
     }
 
     final uploadFilename = filename.trim().isEmpty ? 'capture.jpg' : filename;
@@ -131,14 +151,56 @@ class ApiService {
             filename: uploadFilename,
           ),
         );
+
       final response = await _client
           .send(request)
           .then(http.Response.fromStream)
           .timeout(_detectionUploadTimeout);
 
-      return response.statusCode >= 200 && response.statusCode < 300;
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        try {
+          final dynamic decoded = jsonDecode(response.body);
+          if (decoded is Map<String, dynamic>) {
+            return DetectionSuccess(DetectionResponse.fromJson(decoded));
+          } else if (decoded is Map) {
+            return DetectionSuccess(
+              DetectionResponse.fromJson(Map<String, dynamic>.from(decoded)),
+            );
+          }
+          return const DetectionFailure(
+            userMessage: 'Unexpected response format received from the detection service.',
+          );
+        } catch (_) {
+          return const DetectionFailure(
+            userMessage: 'Unable to parse detection results from the server.',
+          );
+        }
+      }
+
+      if (response.statusCode == 503) {
+        return const DetectionFailure(
+          userMessage:
+              'The AI road-damage detection model is currently unavailable on the backend.',
+          isBackendUnavailable: true,
+        );
+      }
+
+      return const DetectionFailure(
+        userMessage:
+            'Image analysis failed on the server. Please try capturing another photo.',
+      );
+    } on TimeoutException {
+      return const DetectionFailure(
+        userMessage:
+            'Detection request timed out. The server took too long to process the image.',
+        isBackendUnavailable: true,
+      );
     } catch (_) {
-      return false;
+      return const DetectionFailure(
+        userMessage:
+            'Unable to connect to the UrbanEye backend. Please check your connection and server status.',
+        isBackendUnavailable: true,
+      );
     }
   }
 
@@ -162,4 +224,112 @@ class ApiService {
     final normalizedBaseUrl = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
     return Uri.parse(normalizedBaseUrl).resolve('detect');
   }
+}
+
+/// A single detected road damage instance returned by the AI model.
+class RoadDamageDetection {
+  const RoadDamageDetection({
+    required this.label,
+    required this.confidence,
+    required this.bbox,
+    required this.severity,
+  });
+
+  /// The category of damage, e.g. "Pothole", "Alligator Crack", "Transverse Crack", "Longitudinal Crack".
+  final String label;
+
+  /// Detection confidence score in range 0.0 to 1.0.
+  final double confidence;
+
+  /// Bounding box in original image pixel coordinates: [x1, y1, x2, y2].
+  final List<double> bbox;
+
+  /// Categorical severity assessment: "Critical", "High", "Medium", or "Low".
+  final String severity;
+
+  /// Returns confidence formatted as a clean percentage string (e.g. "85%").
+  String get confidencePercentage => '${(confidence * 100).toStringAsFixed(0)}%';
+
+  factory RoadDamageDetection.fromJson(Map<String, dynamic> json) {
+    final rawBbox = json['bbox'];
+    final List<double> parsedBbox = [];
+    if (rawBbox is List) {
+      for (final value in rawBbox) {
+        if (value is num) {
+          parsedBbox.add(value.toDouble());
+        }
+      }
+    }
+
+    return RoadDamageDetection(
+      label: json['label'] as String? ?? 'Road Damage',
+      confidence: (json['confidence'] as num?)?.toDouble() ?? 0.0,
+      bbox: parsedBbox,
+      severity: json['severity'] as String? ?? 'Medium',
+    );
+  }
+}
+
+/// Full response payload from the /detect endpoint.
+class DetectionResponse {
+  const DetectionResponse({
+    required this.status,
+    required this.filename,
+    required this.detections,
+  });
+
+  final String status;
+  final String filename;
+  final List<RoadDamageDetection> detections;
+
+  bool get hasDamage => detections.isNotEmpty;
+  int get damageCount => detections.length;
+
+  factory DetectionResponse.fromJson(Map<String, dynamic> json) {
+    final rawDetections = json['detections'];
+    final List<RoadDamageDetection> parsed = [];
+    if (rawDetections is List) {
+      for (final item in rawDetections) {
+        if (item is Map<String, dynamic>) {
+          parsed.add(RoadDamageDetection.fromJson(item));
+        } else if (item is Map) {
+          parsed.add(
+            RoadDamageDetection.fromJson(Map<String, dynamic>.from(item)),
+          );
+        }
+      }
+    }
+
+    return DetectionResponse(
+      status: json['status'] as String? ?? 'success',
+      filename: json['filename'] as String? ?? '',
+      detections: parsed,
+    );
+  }
+}
+
+/// Sealed result returned by [ApiService.detectDamage].
+sealed class DetectionResult {
+  const DetectionResult();
+}
+
+/// Successful road damage detection result containing parsed model detections.
+class DetectionSuccess extends DetectionResult {
+  const DetectionSuccess(this.response);
+
+  final DetectionResponse response;
+}
+
+/// Failure result with user-facing explanation and backend availability flag.
+class DetectionFailure extends DetectionResult {
+  const DetectionFailure({
+    required this.userMessage,
+    this.isBackendUnavailable = false,
+  });
+
+  /// Safe, human-friendly message suitable for direct display in the UI.
+  final String userMessage;
+
+  /// Whether failure was caused by backend unavailability (offline, 503, timeout).
+  final bool isBackendUnavailable;
 }

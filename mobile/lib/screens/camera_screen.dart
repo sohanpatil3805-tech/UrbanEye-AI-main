@@ -5,6 +5,7 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
 import '../services/api_service.dart';
+import '../widgets/bounding_box_overlay.dart';
 import '../widgets/urbaneye_design_system.dart';
 
 class CameraScreen extends StatefulWidget {
@@ -24,6 +25,10 @@ class _CameraScreenState extends State<CameraScreen>
   late final bool _ownsApiService;
   CameraController? _cameraController;
   Uint8List? _capturedPhoto;
+  Size? _capturedPhotoSize;
+  DetectionResponse? _detectionResult;
+  String? _detectionErrorMessage;
+  bool _isBackendUnavailable = false;
   _CameraUiState _cameraState = _CameraUiState.loading;
   bool _isCapturing = false;
   bool _isUploading = false;
@@ -181,8 +186,18 @@ class _CameraScreenState extends State<CameraScreen>
         return;
       }
 
+      Size? photoSize;
+      try {
+        final decoded = await decodeImageFromList(photoBytes);
+        photoSize = Size(decoded.width.toDouble(), decoded.height.toDouble());
+      } catch (_) {}
+
       setState(() {
         _capturedPhoto = photoBytes;
+        _capturedPhotoSize = photoSize;
+        _detectionResult = null;
+        _detectionErrorMessage = null;
+        _isBackendUnavailable = false;
         _isCapturing = false;
       });
     } on CameraException catch (error) {
@@ -220,6 +235,10 @@ class _CameraScreenState extends State<CameraScreen>
 
     setState(() {
       _capturedPhoto = null;
+      _capturedPhotoSize = null;
+      _detectionResult = null;
+      _detectionErrorMessage = null;
+      _isBackendUnavailable = false;
     });
 
     final controller = _cameraController;
@@ -245,16 +264,22 @@ class _CameraScreenState extends State<CameraScreen>
     setState(() {
       _isUploading = true;
       _uploadAborter = aborter;
+      _detectionErrorMessage = null;
+      _isBackendUnavailable = false;
     });
 
-    var uploadSucceeded = false;
+    DetectionResult result;
     try {
-      uploadSucceeded = await _apiService.uploadDetectionImage(
+      result = await _apiService.detectDamage(
         imageBytes: capturedPhoto,
         abortTrigger: aborter.future,
       );
     } catch (_) {
-      uploadSucceeded = false;
+      result = const DetectionFailure(
+        userMessage:
+            'Unable to connect to the UrbanEye backend. Please check your connection and server status.',
+        isBackendUnavailable: true,
+      );
     }
 
     if (!mounted || !identical(_uploadAborter, aborter)) {
@@ -262,21 +287,37 @@ class _CameraScreenState extends State<CameraScreen>
     }
 
     _uploadAborter = null;
-    setState(() {
-      _isUploading = false;
-    });
 
-    if (uploadSucceeded) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Upload Successful')),
-      );
-      Navigator.of(context).maybePop();
+    if (result is DetectionSuccess) {
+      if (_capturedPhotoSize == null) {
+        try {
+          final decoded = await decodeImageFromList(capturedPhoto);
+          if (mounted) {
+            _capturedPhotoSize = Size(
+              decoded.width.toDouble(),
+              decoded.height.toDouble(),
+            );
+          }
+        } catch (_) {}
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _isUploading = false;
+        _detectionResult = result.response;
+        _detectionErrorMessage = null;
+        _isBackendUnavailable = false;
+      });
       return;
     }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Upload Failed')),
-    );
+    if (result is DetectionFailure) {
+      setState(() {
+        _isUploading = false;
+        _detectionErrorMessage = result.userMessage;
+        _isBackendUnavailable = result.isBackendUnavailable;
+      });
+    }
   }
 
   void _cancelUpload() {
@@ -358,10 +399,15 @@ class _CameraScreenState extends State<CameraScreen>
     if (capturedPhoto != null) {
       return _CapturedPhotoPreview(
         photoBytes: capturedPhoto,
+        photoSize: _capturedPhotoSize,
         isUploading: _isUploading,
+        detectionResult: _detectionResult,
+        errorMessage: _detectionErrorMessage,
+        isBackendUnavailable: _isBackendUnavailable,
         onRetake: _isUploading ? null : () => unawaited(_retakePhoto()),
-        onContinue:
+        onAnalyze:
             _isUploading ? null : () => unawaited(_uploadCapturedPhoto()),
+        onDone: () => Navigator.of(context).maybePop(),
       );
     }
 
@@ -769,49 +815,514 @@ class _DisabledToolButton extends StatelessWidget {
 class _CapturedPhotoPreview extends StatelessWidget {
   const _CapturedPhotoPreview({
     required this.photoBytes,
+    required this.photoSize,
     required this.isUploading,
+    required this.detectionResult,
+    required this.errorMessage,
+    required this.isBackendUnavailable,
     required this.onRetake,
-    required this.onContinue,
+    required this.onAnalyze,
+    required this.onDone,
   });
 
   final Uint8List photoBytes;
+  final Size? photoSize;
   final bool isUploading;
+  final DetectionResponse? detectionResult;
+  final String? errorMessage;
+  final bool isBackendUnavailable;
   final VoidCallback? onRetake;
-  final VoidCallback? onContinue;
+  final VoidCallback? onAnalyze;
+  final VoidCallback onDone;
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF0F172A),
-      body: Stack(
-        fit: StackFit.expand,
+    return PopScope(
+      canPop: !isUploading,
+      child: Scaffold(
+        backgroundColor: const Color(0xFF0F172A),
+        body: detectionResult != null
+            ? _buildResultView(context)
+            : _buildReviewOrLoadingView(context),
+      ),
+    );
+  }
+
+  /// The view shown after detection inference completes.
+  Widget _buildResultView(BuildContext context) {
+    final result = detectionResult!;
+    final colorScheme = Theme.of(context).colorScheme;
+
+    String headerLabel;
+    Color headerBg;
+    Color headerFg;
+    IconData headerIcon;
+
+    if (result.hasDamage) {
+      final highestSeverity = _findHighestSeverity(result.detections);
+      if (highestSeverity == 'Critical') {
+        headerLabel = '${result.damageCount} CRITICAL HAZARD${result.damageCount > 1 ? "S" : ""}';
+        headerBg = const Color(0xFFFFE4E6);
+        headerFg = const Color(0xFFBE123C);
+        headerIcon = Icons.warning_rounded;
+      } else {
+        headerLabel = '${result.damageCount} ROAD HAZARD${result.damageCount > 1 ? "S" : ""} DETECTED';
+        headerBg = const Color(0xFFFFEDD5);
+        headerFg = const Color(0xFFC2410C);
+        headerIcon = Icons.warning_amber_rounded;
+      }
+    } else {
+      headerLabel = 'ROAD SURFACE CLEAR';
+      headerBg = const Color(0xFFDCFCE7);
+      headerFg = const Color(0xFF15803D);
+      headerIcon = Icons.check_circle_rounded;
+    }
+
+    return SafeArea(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Image.memory(photoBytes, fit: BoxFit.cover),
-          const DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [Color(0x550F172A), Color(0xDD0F172A)],
-                stops: [0.35, 1],
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+            child: Row(
+              children: [
+                Material(
+                  color: const Color(0x33FFFFFF),
+                  shape: const CircleBorder(),
+                  clipBehavior: Clip.antiAlias,
+                  child: IconButton(
+                    tooltip: 'Back to camera',
+                    onPressed: onRetake,
+                    color: Colors.white,
+                    icon: const Icon(Icons.arrow_back_rounded),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Detection Results',
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                            ),
+                      ),
+                      Text(
+                        'YOLOv5 RDD2022 AI Model',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Colors.white.withValues(alpha: 0.72),
+                            ),
+                      ),
+                    ],
+                  ),
+                ),
+                StatusChip(
+                  label: headerLabel,
+                  icon: headerIcon,
+                  backgroundColor: headerBg,
+                  foregroundColor: headerFg,
+                ),
+              ],
+            ),
+          ),
+
+          // Image Surface with Bounding Boxes
+          Expanded(
+            flex: 5,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E293B),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.12),
+                    width: 1,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.35),
+                      blurRadius: 18,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Image.memory(photoBytes, fit: BoxFit.contain),
+                    BoundingBoxOverlay(
+                      detections: result.detections,
+                      imageSize: photoSize,
+                      fit: BoxFit.contain,
+                    ),
+                    const Positioned(
+                      top: 12,
+                      right: 12,
+                      child: StatusChip(
+                        label: 'AI BBOX ACTIVE',
+                        icon: Icons.layers_outlined,
+                        backgroundColor: Color(0x4D000000),
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
-          SafeArea(
+
+          const SizedBox(height: 12),
+
+          // Results List & Metrics
+          Expanded(
+            flex: 4,
             child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Align(
-                    alignment: Alignment.centerLeft,
-                    child: StatusChip(
-                      label: 'PHOTO CAPTURED',
-                      backgroundColor: Color(0xE6FFFFFF),
-                      foregroundColor: Color(0xFF1D4ED8),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: colorScheme.surfaceContainerLowest,
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.15),
+                      blurRadius: 16,
+                      offset: const Offset(0, -4),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          result.hasDamage
+                              ? 'Detected Damage (${result.damageCount})'
+                              : 'Road Condition',
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w800,
+                              ),
+                        ),
+                        Text(
+                          result.filename.isNotEmpty ? result.filename : 'Frame analyzed',
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: colorScheme.onSurfaceVariant,
+                              ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+
+                    // Scrollable damage items or clear message
+                    Expanded(
+                      child: result.hasDamage
+                          ? ListView.separated(
+                              itemCount: result.detections.length,
+                              separatorBuilder: (_, __) => const SizedBox(height: 8),
+                              itemBuilder: (context, index) {
+                                final item = result.detections[index];
+                                final color = severityColor(item.severity);
+                                final bgTint = severityBackgroundColor(item.severity);
+
+                                return Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 10,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+                                    borderRadius: BorderRadius.circular(14),
+                                    border: Border.all(
+                                      color: color.withValues(alpha: 0.3),
+                                      width: 1,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Container(
+                                        width: 38,
+                                        height: 38,
+                                        decoration: BoxDecoration(
+                                          color: bgTint,
+                                          borderRadius: BorderRadius.circular(10),
+                                        ),
+                                        child: Icon(
+                                          item.label.toLowerCase().contains('pothole')
+                                              ? Icons.warning_rounded
+                                              : Icons.broken_image_rounded,
+                                          color: color,
+                                          size: 20,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              item.label,
+                                              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                                    fontWeight: FontWeight.w800,
+                                                  ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              'Confidence: ${item.confidencePercentage}',
+                                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                                    color: colorScheme.onSurfaceVariant,
+                                                  ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      StatusChip(
+                                        label: item.severity.toUpperCase(),
+                                        backgroundColor: bgTint,
+                                        foregroundColor: color,
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            )
+                          : Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    width: 48,
+                                    height: 48,
+                                    decoration: const BoxDecoration(
+                                      color: Color(0xFFDCFCE7),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const Icon(
+                                      Icons.verified_rounded,
+                                      color: Color(0xFF15803D),
+                                      size: 26,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    'No road hazards detected',
+                                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'The inspected pavement looks smooth and hazard-free.',
+                                    textAlign: TextAlign.center,
+                                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                          color: colorScheme.onSurfaceVariant,
+                                        ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    // Actions
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: onRetake,
+                            icon: const Icon(Icons.camera_alt_outlined),
+                            label: const Text('Scan Another'),
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size.fromHeight(50),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: PrimaryButton(
+                            label: 'Done',
+                            icon: Icons.check_rounded,
+                            onPressed: onDone,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The view shown before inference, during inference, or on error.
+  Widget _buildReviewOrLoadingView(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Image.memory(photoBytes, fit: BoxFit.cover),
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Color(0x550F172A), Color(0xDD0F172A)],
+              stops: [0.35, 1],
+            ),
+          ),
+        ),
+        SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: StatusChip(
+                    label: isUploading
+                        ? 'AI PROCESSING'
+                        : errorMessage != null
+                            ? 'ANALYSIS FAILED'
+                            : 'PHOTO CAPTURED',
+                    icon: isUploading
+                        ? Icons.sync_rounded
+                        : errorMessage != null
+                            ? Icons.error_outline_rounded
+                            : Icons.photo_camera_rounded,
+                    backgroundColor: errorMessage != null
+                        ? const Color(0xFFFFE4E6)
+                        : const Color(0xE6FFFFFF),
+                    foregroundColor: errorMessage != null
+                        ? const Color(0xFFBE123C)
+                        : const Color(0xFF1D4ED8),
+                  ),
+                ),
+                const Spacer(),
+
+                // Error State Card
+                if (errorMessage != null) ...[
+                  Container(
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E293B),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(
+                        color: const Color(0xFFEF4444).withValues(alpha: 0.6),
+                        width: 1.5,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.25),
+                          blurRadius: 14,
+                          offset: const Offset(0, 6),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              width: 40,
+                              height: 40,
+                              decoration: const BoxDecoration(
+                                color: Color(0x33EF4444),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                isBackendUnavailable
+                                    ? Icons.cloud_off_rounded
+                                    : Icons.error_outline_rounded,
+                                color: const Color(0xFFEF4444),
+                                size: 22,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    isBackendUnavailable
+                                        ? 'Backend Unavailable'
+                                        : 'Detection Failed',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium
+                                        ?.copyWith(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    isBackendUnavailable
+                                        ? 'Cannot reach UrbanEye backend service'
+                                        : 'Inference did not succeed',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(
+                                          color: Colors.white.withValues(alpha: 0.72),
+                                        ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          errorMessage!,
+                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                color: Colors.white.withValues(alpha: 0.9),
+                              ),
+                        ),
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: onRetake,
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.white,
+                                  side: BorderSide(
+                                    color: Colors.white.withValues(alpha: 0.6),
+                                  ),
+                                  minimumSize: const Size.fromHeight(48),
+                                ),
+                                child: const Text('Retake'),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: PrimaryButton(
+                                label: 'Retry Analysis',
+                                icon: Icons.refresh_rounded,
+                                onPressed: onAnalyze,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
-                  const Spacer(),
+                ] else ...[
+                  // Normal Review State Card
                   Text(
                     'Review your photo',
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
@@ -821,7 +1332,7 @@ class _CapturedPhotoPreview extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Review your photo, then upload it to UrbanEye AI for processing.',
+                    'Review the road frame, then run AI detection to scan for potholes and cracks.',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           color: Colors.white.withValues(alpha: 0.82),
                         ),
@@ -839,43 +1350,90 @@ class _CapturedPhotoPreview extends StatelessWidget {
                   ),
                   const SizedBox(height: 12),
                   PrimaryButton(
-                    label: isUploading ? 'Uploading...' : 'Continue',
-                    icon: isUploading ? null : Icons.arrow_forward_rounded,
-                    onPressed: onContinue,
+                    label: isUploading ? 'Analyzing...' : 'Analyze Road Damage',
+                    icon: isUploading ? null : Icons.auto_awesome_rounded,
+                    onPressed: onAnalyze,
                   ),
                 ],
-              ),
+              ],
             ),
           ),
-          if (isUploading)
-            const Positioned.fill(
-              child: ColoredBox(
-                color: Color(0x990F172A),
-                child: Center(
+        ),
+
+        // Full Screen Loading State Overlay
+        if (isUploading)
+          Positioned.fill(
+            child: ColoredBox(
+              color: const Color(0xB80F172A),
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 32),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      SizedBox(
-                        width: 40,
-                        height: 40,
-                        child: CircularProgressIndicator(color: Colors.white),
-                      ),
-                      SizedBox(height: 16),
-                      Text(
-                        'Uploading image...',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w800,
+                      Container(
+                        width: 72,
+                        height: 72,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2563EB).withValues(alpha: 0.2),
+                          shape: BoxShape.circle,
                         ),
+                        child: const Center(
+                          child: SizedBox(
+                            width: 36,
+                            height: 36,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 3.5,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      Text(
+                        'Analyzing Road Damage...',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                            ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Running YOLOv5 RDD2022 AI inference to identify potholes and cracks...',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              color: Colors.white.withValues(alpha: 0.78),
+                            ),
+                      ),
+                      const SizedBox(height: 16),
+                      const StatusChip(
+                        label: 'SIH DEMO AI PIPELINE',
+                        icon: Icons.memory_rounded,
+                        backgroundColor: Color(0x33FFFFFF),
+                        foregroundColor: Colors.white,
                       ),
                     ],
                   ),
                 ),
               ),
             ),
-        ],
-      ),
+          ),
+      ],
     );
+  }
+
+  static String _findHighestSeverity(List<RoadDamageDetection> detections) {
+    if (detections.any((d) => d.severity.toLowerCase() == 'critical')) {
+      return 'Critical';
+    }
+    if (detections.any((d) => d.severity.toLowerCase() == 'high')) {
+      return 'High';
+    }
+    if (detections.any((d) => d.severity.toLowerCase() == 'medium')) {
+      return 'Medium';
+    }
+    return 'Low';
   }
 }
 
