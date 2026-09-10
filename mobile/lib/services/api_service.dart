@@ -1,52 +1,83 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart'
+    show debugPrint, debugPrintStack, kDebugMode, protected;
 import 'package:http/http.dart' as http;
+
+import '../config/api_config.dart';
 
 /// Lightweight client for the UrbanEye AI backend.
 ///
-/// Override [baseUrl] in code or pass the URBANEYE_API_BASE_URL dart define
-/// when launching the app.
+/// Uses the current saved configuration on each request. An explicit [baseUrl]
+/// override is retained for connection tests and injected clients.
 class ApiService {
   ApiService({
     http.Client? client,
     String? baseUrl,
     Duration healthCheckTimeout = const Duration(seconds: 5),
     Duration locationUpdateTimeout = const Duration(seconds: 4),
-    Duration detectionUploadTimeout = const Duration(seconds: 15),
+    Duration detectionUploadTimeout = defaultDetectionUploadTimeout,
   })  : _client = client ?? http.Client(),
         _ownsClient = client == null,
-        baseUrl = baseUrl ?? defaultBaseUrl,
+        _baseUrlOverride = baseUrl,
         _healthCheckTimeout = healthCheckTimeout,
         _locationUpdateTimeout = locationUpdateTimeout,
         _detectionUploadTimeout = detectionUploadTimeout;
 
-  static const defaultBaseUrl = String.fromEnvironment(
-    'URBANEYE_API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:8000',
-  );
+  static String get defaultBaseUrl => ApiConfig.baseUrl;
+
+  // /detect responds only after inference, which can exceed 15 seconds on CPU.
+  static const defaultDetectionUploadTimeout = Duration(seconds: 60);
 
   final http.Client _client;
   final bool _ownsClient;
-  final String baseUrl;
+  final String? _baseUrlOverride;
+  String get baseUrl => _baseUrlOverride ?? ApiConfig.baseUrl;
   final Duration _healthCheckTimeout;
   final Duration _locationUpdateTimeout;
   final Duration _detectionUploadTimeout;
 
-  /// Returns true only when the backend responds to GET /health with 2xx.
-  Future<bool> checkHealth() async {
-    try {
-      final response = await _client.get(
-        _healthUri,
-        headers: const <String, String>{
-          'Accept': 'application/json',
-        },
-      ).timeout(_healthCheckTimeout);
+  Future<bool> checkHealth() async => (await testConnection()).isConnected;
 
-      return response.statusCode >= 200 && response.statusCode < 300;
+  /// Older backends without /ping are checked through their OpenAPI document.
+  Future<BackendConnectionResult> testConnection() async {
+    final target = baseUrl;
+    try {
+      final normalized = ApiConfig.normalize(target);
+      for (final endpoint in ['ping', 'openapi.json']) {
+        final uri = Uri.parse('$normalized/').resolve(endpoint);
+        final response = await _client.get(uri, headers: const {
+          'Accept': 'application/json',
+        }).timeout(_healthCheckTimeout);
+        if (endpoint == 'ping' && response.statusCode == 404) continue;
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          return BackendConnectionResult(false,
+              'Backend responded with HTTP ${response.statusCode} at $uri.');
+        }
+        if (endpoint == 'openapi.json') {
+          final document = jsonDecode(response.body);
+          if (document is! Map<String, dynamic> ||
+              document['openapi'] is! String ||
+              document['paths'] is! Map ||
+              !(document['paths'] as Map).containsKey('/detect')) {
+            return const BackendConnectionResult(
+                false, 'This server does not expose the detection API.');
+          }
+        }
+        return BackendConnectionResult(true, 'Connected to $normalized.');
+      }
+    } on TimeoutException {
+      return BackendConnectionResult(false,
+          'Connection timed out. Check Wi-Fi and the PC firewall for $target.');
+    } on FormatException catch (error) {
+      return BackendConnectionResult(false, error.message);
     } catch (_) {
-      return false;
+      return BackendConnectionResult(false,
+          'Cannot reach $target. Check the address, Wi-Fi and backend server.');
     }
+    return const BackendConnectionResult(false, 'Backend is unavailable.');
   }
 
   /// Sends a GPS update to the backend.
@@ -107,12 +138,20 @@ class ApiService {
   }
 
   /// Uploads a captured image to the detection endpoint as multipart data.
+  /// Coordinates are optional for existing callers and must be supplied together.
   Future<bool> uploadDetectionImage({
     required Uint8List imageBytes,
     String filename = 'capture.jpg',
+    double? latitude,
+    double? longitude,
     Future<void>? abortTrigger,
   }) async {
-    if (imageBytes.isEmpty) {
+    if (imageBytes.isEmpty ||
+        (latitude == null) != (longitude == null) ||
+        (latitude != null &&
+            (!latitude.isFinite || latitude < -90 || latitude > 90)) ||
+        (longitude != null &&
+            (!longitude.isFinite || longitude < -180 || longitude > 180))) {
       return false;
     }
 
@@ -124,6 +163,10 @@ class ApiService {
         abortTrigger: abortTrigger,
       )
         ..headers['Accept'] = 'application/json'
+        ..fields.addAll({
+          if (latitude != null) 'latitude': latitude.toString(),
+          if (longitude != null) 'longitude': longitude.toString(),
+        })
         ..files.add(
           http.MultipartFile.fromBytes(
             'file',
@@ -136,8 +179,21 @@ class ApiService {
           .then(http.Response.fromStream)
           .timeout(_detectionUploadTimeout);
 
-      return response.statusCode >= 200 && response.statusCode < 300;
-    } catch (_) {
+      final succeeded = response.statusCode >= 200 && response.statusCode < 300;
+      if (succeeded) handleDetectionResponse(response);
+      if (!succeeded && kDebugMode) {
+        // Include FastAPI's detail (including validation errors) without
+        // exposing backend diagnostics in the user-facing snackbar.
+        debugPrint(
+          'POST $_detectUri failed (${response.statusCode}): ${response.body}',
+        );
+      }
+      return succeeded;
+    } catch (error, stackTrace) {
+      if (kDebugMode) {
+        debugPrint('POST $_detectUri failed: $error');
+        debugPrintStack(stackTrace: stackTrace);
+      }
       return false;
     }
   }
@@ -148,10 +204,9 @@ class ApiService {
     }
   }
 
-  Uri get _healthUri {
-    final normalizedBaseUrl = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
-    return Uri.parse(normalizedBaseUrl).resolve('health');
-  }
+  /// Subclasses can retain a result without another HTTP client or upload path.
+  @protected
+  void handleDetectionResponse(http.Response response) {}
 
   Uri get _locationUri {
     final normalizedBaseUrl = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
@@ -162,4 +217,11 @@ class ApiService {
     final normalizedBaseUrl = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
     return Uri.parse(normalizedBaseUrl).resolve('detect');
   }
+}
+
+class BackendConnectionResult {
+  const BackendConnectionResult(this.isConnected, this.message);
+
+  final bool isConnected;
+  final String message;
 }

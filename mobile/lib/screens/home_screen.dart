@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../config/api_config.dart';
 import '../services/api_service.dart';
 import '../widgets/urbaneye_design_system.dart';
 
@@ -14,21 +15,26 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   late final ApiService _apiService;
   late final bool _ownsApiService;
   _BackendHealth _backendHealth = _BackendHealth.checking;
+  int _healthCheckGeneration = 0;
 
   @override
   void initState() {
     super.initState();
     _ownsApiService = widget.apiService == null;
     _apiService = widget.apiService ?? ApiService();
+    ApiConfig.changes.addListener(_refreshBackendHealth);
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_checkBackendHealth());
   }
 
   @override
   void dispose() {
+    ApiConfig.changes.removeListener(_refreshBackendHealth);
+    WidgetsBinding.instance.removeObserver(this);
     if (_ownsApiService) {
       _apiService.dispose();
     }
@@ -36,8 +42,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _checkBackendHealth() async {
+    final generation = ++_healthCheckGeneration;
     final isOnline = await _apiService.checkHealth();
-    if (!mounted) {
+    if (!mounted || generation != _healthCheckGeneration) {
       return;
     }
 
@@ -45,6 +52,21 @@ class _HomeScreenState extends State<HomeScreen> {
       _backendHealth =
           isOnline ? _BackendHealth.online : _BackendHealth.offline;
     });
+  }
+
+  void _refreshBackendHealth() {
+    setState(() => _backendHealth = _BackendHealth.checking);
+    unawaited(_checkBackendHealth());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refreshBackendHealth();
+  }
+
+  Future<void> _openBackendSettings() async {
+    await Navigator.pushNamed(context, '/settings');
+    if (mounted) _refreshBackendHealth();
   }
 
   StatusChip get _backendHealthChip {
@@ -105,7 +127,23 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                 ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                children: [
+                  TextButton.icon(
+                    onPressed: _openBackendSettings,
+                    icon: const Icon(Icons.settings_outlined),
+                    label: const Text('Backend Settings'),
+                  ),
+                  IconButton(
+                    tooltip: 'Retry backend connection',
+                    onPressed: _refreshBackendHealth,
+                    icon: const Icon(Icons.refresh),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
               Text(
                 'System readiness',
                 style: Theme.of(context).textTheme.titleLarge?.copyWith(
@@ -191,13 +229,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       label: 'Start Monitoring',
                       icon: Icons.play_arrow_rounded,
                       onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                              'Monitoring controls will be available soon.',
-                            ),
-                          ),
-                        );
+                        Navigator.of(context).pushNamed('/monitoring');
                       },
                     ),
                   ],

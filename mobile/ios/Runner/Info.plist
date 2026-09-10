@@ -26,8 +26,12 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>UrbanEye AI uses the camera for live road monitoring and road-hazard photos.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>UrbanEye AI uses your location while tracking an active vehicle route.</string>
+	<string>UrbanEye AI uses your location to track active vehicle routes and locate uploaded road hazards.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>UrbanEye AI lets you select a photo to detect road hazards.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

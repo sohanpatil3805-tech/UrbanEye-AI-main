@@ -2,9 +2,32 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:urbaneye_mobile/main.dart';
 import 'package:urbaneye_mobile/screens/camera_screen.dart';
+import 'package:urbaneye_mobile/screens/monitoring_screen.dart';
 import 'package:urbaneye_mobile/widgets/urbaneye_design_system.dart';
 
 void main() {
+  testWidgets('Start Monitoring opens monitoring and returns to the dashboard',
+      (tester) async {
+    await tester.pumpWidget(const UrbanEyeApp());
+    await tester.enterText(find.bySemanticsLabel('Email'), 'user@example.com');
+    await tester.enterText(find.bySemanticsLabel('Password'), 'password123');
+    await tester.tap(find.text('Login'));
+    await tester.pump(const Duration(milliseconds: 700));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('Start Monitoring'), 200);
+    await tester.tap(find.text('Start Monitoring'));
+    await tester.pumpAndSettle();
+    expect(find.byType(MonitoringScreen), findsOneWidget);
+    expect(find.text('Ready to Monitor'), findsOneWidget);
+    expect(find.text('Stop Monitoring'), findsOneWidget);
+    expect(find.byType(CameraScreen), findsNothing);
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+    expect(find.byType(MonitoringScreen), findsNothing);
+    expect(find.text('Start Monitoring'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('login validates empty email and password', (
     WidgetTester tester,
   ) async {
@@ -126,7 +149,8 @@ void main() {
     expect(find.text('UNAVAILABLE'), findsOneWidget);
     expect(find.text('Camera unavailable'), findsOneWidget);
     expect(
-      find.text('Check that a camera is available and not in use by another app.'),
+      find.text(
+          'Check that a camera is available and not in use by another app.'),
       findsOneWidget,
     );
     expect(find.text('PREVIEW MODE'), findsOneWidget);
@@ -134,7 +158,8 @@ void main() {
     expect(find.text('Flash'), findsOneWidget);
     expect(find.text('Gallery'), findsOneWidget);
     expect(
-      find.text('Resolve camera access above, then try again.'),
+      find.text(
+          'Select an image from Gallery, or resolve camera access above.'),
       findsOneWidget,
     );
 

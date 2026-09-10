@@ -10,6 +10,47 @@ import 'package:urbaneye_mobile/models/detection_result.dart';
 import 'package:urbaneye_mobile/services/detection_result_service.dart';
 
 void main() {
+  test('image-only callers retain the existing multipart API', () async {
+    http.MultipartRequest? upload;
+    final service = DetectionResultService(
+      client: MockClient.streaming((request, stream) async {
+        upload = request as http.MultipartRequest;
+        await stream.drain<void>();
+        return _streamedResponse(_successBody([]));
+      }),
+    );
+    addTearDown(service.dispose);
+    expect(await _upload(service), isTrue);
+    expect(upload!.fields, isEmpty);
+    expect(upload!.files.single.field, 'file');
+  });
+
+  test('invalid or incomplete coordinates never reach the backend', () async {
+    var requests = 0;
+    final service = DetectionResultService(client: MockClient((_) async {
+      requests++;
+      return http.Response(_successBody([]), 200);
+    }));
+    addTearDown(service.dispose);
+    for (final coordinates in <(double?, double?)>[
+      (12, null),
+      (null, 76),
+      (91, 76),
+      (12, -181),
+      (double.nan, 76),
+      (12, double.infinity),
+    ]) {
+      expect(
+          await service.uploadDetectionImage(
+            imageBytes: Uint8List.fromList([1, 2, 3]),
+            latitude: coordinates.$1,
+            longitude: coordinates.$2,
+          ),
+          isFalse);
+    }
+    expect(requests, 0);
+  });
+
   test('uploads one multipart request and retains every backend detection',
       () async {
     var requests = 0;
@@ -25,6 +66,8 @@ void main() {
           request.headers['content-type'], startsWith('multipart/form-data'));
 
       final multipart = request as http.MultipartRequest;
+      expect(multipart.fields,
+          {'latitude': '12.345678', 'longitude': '-76.123456'});
       expect(multipart.files, hasLength(1));
       expect(multipart.files.single.field, 'file');
       expect(multipart.files.single.filename, 'road.jpg');
@@ -51,6 +94,8 @@ void main() {
       await service.uploadDetectionImage(
         imageBytes: imageBytes,
         filename: 'road.jpg',
+        latitude: 12.345678,
+        longitude: -76.123456,
       ),
       isTrue,
     );

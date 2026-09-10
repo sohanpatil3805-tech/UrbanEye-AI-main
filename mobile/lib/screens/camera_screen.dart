@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../services/api_service.dart';
 import '../services/detection_result_service.dart';
@@ -12,9 +14,16 @@ import '../widgets/urbaneye_design_system.dart';
 import 'result_screen.dart';
 
 class CameraScreen extends StatefulWidget {
-  const CameraScreen({this.apiService, super.key});
+  const CameraScreen({
+    this.apiService,
+    this.imagePicker,
+    this.locationService = const GeolocatorLocationService(),
+    super.key,
+  });
 
   final ApiService? apiService;
+  final ImagePicker? imagePicker;
+  final LocationService locationService;
 
   @override
   State<CameraScreen> createState() => _CameraScreenState();
@@ -26,12 +35,17 @@ class _CameraScreenState extends State<CameraScreen>
 
   late final ApiService _apiService;
   late final bool _ownsApiService;
+  late final ImagePicker _imagePicker;
   CameraController? _cameraController;
   Uint8List? _capturedPhoto;
-  Position? _capturedPosition;
   _CameraUiState _cameraState = _CameraUiState.loading;
   bool _isCapturing = false;
   bool _isUploading = false;
+  bool _isLocating = false;
+  bool _isPickingImage = false;
+  bool _isSettingFlash = false;
+  bool _supportsFlash = false;
+  String _photoFilename = 'capture.jpg';
   int _initializationToken = 0;
   Completer<void>? _uploadAborter;
 
@@ -40,6 +54,7 @@ class _CameraScreenState extends State<CameraScreen>
     super.initState();
     _ownsApiService = widget.apiService == null;
     _apiService = widget.apiService ?? DetectionResultService();
+    _imagePicker = widget.imagePicker ?? ImagePicker();
     WidgetsBinding.instance.addObserver(this);
     unawaited(_initializeCamera());
   }
@@ -51,7 +66,9 @@ class _CameraScreenState extends State<CameraScreen>
       return;
     }
 
-    if (state == AppLifecycleState.resumed && _capturedPhoto == null) {
+    if (state == AppLifecycleState.resumed &&
+        _capturedPhoto == null &&
+        !_isPickingImage) {
       unawaited(_initializeCamera());
     }
   }
@@ -73,6 +90,9 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   Future<void> _initializeCamera() async {
+    if (_isPickingImage) {
+      return;
+    }
     final initializationToken = ++_initializationToken;
     final previousController = _cameraController;
     _cameraController = null;
@@ -87,6 +107,8 @@ class _CameraScreenState extends State<CameraScreen>
     setState(() {
       _cameraState = _CameraUiState.loading;
       _isCapturing = false;
+      _isSettingFlash = false;
+      _supportsFlash = false;
     });
 
     try {
@@ -132,9 +154,22 @@ class _CameraScreenState extends State<CameraScreen>
         return;
       }
 
+      var supportsFlash = true;
+      try {
+        await controller.setFlashMode(FlashMode.off);
+      } catch (_) {
+        // Cameras without flash must still support preview and capture.
+        supportsFlash = false;
+      }
+      if (!mounted || initializationToken != _initializationToken) {
+        await _disposeController(controller);
+        return;
+      }
+
       setState(() {
         _cameraController = controller;
         _cameraState = _CameraUiState.ready;
+        _supportsFlash = supportsFlash;
       });
     } on CameraException catch (error) {
       _setCameraState(
@@ -159,7 +194,11 @@ class _CameraScreenState extends State<CameraScreen>
 
   Future<void> _capturePhoto() async {
     final controller = _cameraController;
-    if (controller == null || !controller.value.isInitialized || _isCapturing) {
+    if (controller == null ||
+        !controller.value.isInitialized ||
+        _isCapturing ||
+        _isSettingFlash ||
+        _isPickingImage) {
       return;
     }
 
@@ -169,11 +208,18 @@ class _CameraScreenState extends State<CameraScreen>
 
     try {
       final photo = await controller.takePicture();
-      final capturedPosition = LocationStore.latestPosition;
       final photoBytes = await photo.readAsBytes();
 
       if (!mounted || controller != _cameraController) {
         return;
+      }
+
+      try {
+        if (controller.value.flashMode == FlashMode.torch) {
+          await controller.setFlashMode(FlashMode.off);
+        }
+      } catch (_) {
+        // Retain the captured image even if the camera cannot change flash mode.
       }
 
       try {
@@ -189,7 +235,7 @@ class _CameraScreenState extends State<CameraScreen>
 
       setState(() {
         _capturedPhoto = photoBytes;
-        _capturedPosition = capturedPosition;
+        _photoFilename = photo.name;
         _isCapturing = false;
       });
     } on CameraException catch (error) {
@@ -220,6 +266,91 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
+  Future<void> _toggleFlash() async {
+    final controller = _cameraController;
+    if (controller == null ||
+        !controller.value.isInitialized ||
+        !_supportsFlash ||
+        _isSettingFlash ||
+        _isCapturing ||
+        _isPickingImage ||
+        _isUploading) {
+      return;
+    }
+
+    final mode = controller.value.flashMode == FlashMode.torch
+        ? FlashMode.off
+        : FlashMode.torch;
+    setState(() => _isSettingFlash = true);
+    try {
+      await controller.setFlashMode(mode);
+    } catch (_) {
+      if (mounted && controller == _cameraController) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Unable to change flash on this camera.')),
+        );
+      }
+    } finally {
+      if (mounted && controller == _cameraController) {
+        setState(() => _isSettingFlash = false);
+      }
+    }
+  }
+
+  Future<void> _pickGalleryImage() async {
+    if (_isPickingImage || _isCapturing || _isUploading || _isSettingFlash) {
+      return;
+    }
+
+    setState(() {
+      _isPickingImage = true;
+      _cameraState = _CameraUiState.loading;
+    });
+
+    try {
+      await _releaseCamera();
+      if (!mounted) {
+        return;
+      }
+      final XFile? photo = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        requestFullMetadata: false,
+      );
+      if (photo == null || !mounted) {
+        return;
+      }
+      final photoBytes = await photo.readAsBytes();
+      if (!mounted) {
+        return;
+      }
+      if (photoBytes.isEmpty) {
+        throw const FormatException('Empty image');
+      }
+      setState(() {
+        _capturedPhoto = photoBytes;
+        _photoFilename = photo.name;
+      });
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Unable to open gallery image. Please try again.'),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isPickingImage = false;
+        });
+        if (_capturedPhoto == null) {
+          await _initializeCamera();
+        }
+      }
+    }
+  }
+
   Future<void> _retakePhoto() async {
     if (!mounted || _isUploading) {
       return;
@@ -227,7 +358,6 @@ class _CameraScreenState extends State<CameraScreen>
 
     setState(() {
       _capturedPhoto = null;
-      _capturedPosition = null;
     });
 
     final controller = _cameraController;
@@ -243,6 +373,50 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
+  Future<Position?> _fetchUploadPosition(Completer<void> aborter) async {
+    bool isActive() => mounted && identical(_uploadAborter, aborter);
+    final locationService = widget.locationService;
+    final enabled = await locationService.isLocationServiceEnabled();
+    if (!isActive()) return null;
+    if (!enabled) {
+      throw const _UploadLocationException(
+        'Turn on location services, then tap Continue to try again.',
+      );
+    }
+
+    var permission = await locationService.checkPermission();
+    if (!isActive()) return null;
+    if (permission == LocationPermission.denied) {
+      permission = await locationService.requestPermission();
+      if (!isActive()) return null;
+    }
+    if (permission == LocationPermission.deniedForever) {
+      throw const _UploadLocationException(
+        'Allow location access in app settings, then tap Continue to try again.',
+      );
+    }
+    if (permission != LocationPermission.whileInUse &&
+        permission != LocationPermission.always) {
+      throw const _UploadLocationException(
+        'Location permission is needed to upload. Tap Continue to try again.',
+      );
+    }
+
+    final position = await locationService.getCurrentPosition();
+    if (!isActive()) return null;
+    if (!position.latitude.isFinite ||
+        position.latitude < -90 ||
+        position.latitude > 90 ||
+        !position.longitude.isFinite ||
+        position.longitude < -180 ||
+        position.longitude > 180) {
+      throw const _UploadLocationException(
+        'Unable to get valid GPS coordinates. Please try again.',
+      );
+    }
+    return position;
+  }
+
   Future<void> _uploadCapturedPhoto() async {
     final capturedPhoto = _capturedPhoto;
     if (capturedPhoto == null || _isUploading) {
@@ -252,17 +426,40 @@ class _CameraScreenState extends State<CameraScreen>
     final aborter = Completer<void>();
     setState(() {
       _isUploading = true;
+      _isLocating = true;
       _uploadAborter = aborter;
     });
 
     var uploadSucceeded = false;
+    var failureMessage =
+        'Unable to upload your image. Please check your connection and try again.';
+    Position? uploadPosition;
     try {
+      uploadPosition = await _fetchUploadPosition(aborter);
+      if (!mounted ||
+          !identical(_uploadAborter, aborter) ||
+          uploadPosition == null) {
+        return;
+      }
+      setState(() => _isLocating = false);
       uploadSucceeded = await _apiService.uploadDetectionImage(
         imageBytes: capturedPhoto,
+        filename: _photoFilename,
+        latitude: uploadPosition.latitude,
+        longitude: uploadPosition.longitude,
         abortTrigger: aborter.future,
       );
-    } catch (_) {
-      uploadSucceeded = false;
+    } on _UploadLocationException catch (error) {
+      failureMessage = error.message;
+    } catch (error, stackTrace) {
+      if (kDebugMode) {
+        debugPrint('Image upload failed: $error');
+        debugPrintStack(stackTrace: stackTrace);
+      }
+      if (_isLocating) {
+        failureMessage =
+            'Unable to get your location. Check GPS and try again.';
+      }
     }
 
     if (!mounted || !identical(_uploadAborter, aborter)) {
@@ -272,6 +469,7 @@ class _CameraScreenState extends State<CameraScreen>
     _uploadAborter = null;
     setState(() {
       _isUploading = false;
+      _isLocating = false;
     });
 
     if (uploadSucceeded) {
@@ -289,7 +487,7 @@ class _CameraScreenState extends State<CameraScreen>
           builder: (context) => ResultScreen(
             photoBytes: capturedPhoto,
             result: result,
-            position: _capturedPosition,
+            position: uploadPosition,
           ),
         ),
       );
@@ -300,7 +498,7 @@ class _CameraScreenState extends State<CameraScreen>
     }
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Upload Failed')),
+      SnackBar(content: Text(failureMessage)),
     );
   }
 
@@ -366,15 +564,18 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   String get _footerText {
+    if (_isPickingImage) {
+      return 'Selecting a photo from your gallery...';
+    }
     if (_cameraState == _CameraUiState.ready) {
       return _isCapturing
           ? 'Capturing your photo...'
-          : 'Frame your subject, then tap Capture. Flash and Gallery are unavailable for now.';
+          : 'Tap Capture to take a photo, or Gallery to select an image.';
     }
     if (_cameraState == _CameraUiState.loading) {
       return 'Requesting camera access and preparing the live preview...';
     }
-    return 'Resolve camera access above, then try again.';
+    return 'Select an image from Gallery, or resolve camera access above.';
   }
 
   @override
@@ -384,6 +585,7 @@ class _CameraScreenState extends State<CameraScreen>
       return _CapturedPhotoPreview(
         photoBytes: capturedPhoto,
         isUploading: _isUploading,
+        isLocating: _isLocating,
         onRetake: _isUploading ? null : () => unawaited(_retakePhoto()),
         onContinue:
             _isUploading ? null : () => unawaited(_uploadCapturedPhoto()),
@@ -392,7 +594,12 @@ class _CameraScreenState extends State<CameraScreen>
 
     final colorScheme = Theme.of(context).colorScheme;
     final headerStatus = _headerStatus;
-    final isCameraReady = _cameraState == _CameraUiState.ready && !_isCapturing;
+    final isCameraReady = _cameraState == _CameraUiState.ready &&
+        _cameraController?.value.isInitialized == true &&
+        !_isCapturing &&
+        !_isPickingImage &&
+        !_isSettingFlash;
+    final isFlashOn = _cameraController?.value.flashMode == FlashMode.torch;
 
     return Scaffold(
       backgroundColor: colorScheme.surfaceContainerLowest,
@@ -432,18 +639,34 @@ class _CameraScreenState extends State<CameraScreen>
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  const _DisabledToolButton(
-                    icon: Icons.flash_on_rounded,
+                  _ToolButton(
+                    icon: Icons.flash_off_rounded,
+                    selectedIcon: Icons.flash_on_rounded,
+                    isSelected: isFlashOn,
                     label: 'Flash',
+                    tooltip: !_supportsFlash
+                        ? 'Flash unavailable'
+                        : isFlashOn
+                            ? 'Turn flash off'
+                            : 'Turn flash on',
+                    onPressed: isCameraReady && _supportsFlash
+                        ? () => unawaited(_toggleFlash())
+                        : null,
                   ),
                   _CaptureButton(
                     isCapturing: _isCapturing,
                     onPressed:
                         isCameraReady ? () => unawaited(_capturePhoto()) : null,
                   ),
-                  const _DisabledToolButton(
+                  _ToolButton(
                     icon: Icons.photo_library_outlined,
                     label: 'Gallery',
+                    onPressed: _isCapturing ||
+                            _isPickingImage ||
+                            _isUploading ||
+                            _isSettingFlash
+                        ? null
+                        : () => unawaited(_pickGalleryImage()),
                   ),
                 ],
               ),
@@ -461,6 +684,12 @@ class _CameraScreenState extends State<CameraScreen>
       ),
     );
   }
+}
+
+class _UploadLocationException implements Exception {
+  const _UploadLocationException(this.message);
+
+  final String message;
 }
 
 class _HeaderBackButton extends StatelessWidget {
@@ -755,11 +984,22 @@ class _CaptureButton extends StatelessWidget {
   }
 }
 
-class _DisabledToolButton extends StatelessWidget {
-  const _DisabledToolButton({required this.icon, required this.label});
+class _ToolButton extends StatelessWidget {
+  const _ToolButton({
+    required this.icon,
+    required this.label,
+    this.onPressed,
+    this.tooltip,
+    this.isSelected,
+    this.selectedIcon,
+  });
 
   final IconData icon;
   final String label;
+  final VoidCallback? onPressed;
+  final String? tooltip;
+  final bool? isSelected;
+  final IconData? selectedIcon;
 
   @override
   Widget build(BuildContext context) {
@@ -769,9 +1009,11 @@ class _DisabledToolButton extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         IconButton.filledTonal(
-          tooltip: '$label unavailable',
-          onPressed: null,
+          tooltip: tooltip ?? label,
+          onPressed: onPressed,
           icon: Icon(icon),
+          isSelected: isSelected,
+          selectedIcon: selectedIcon == null ? null : Icon(selectedIcon),
           style: IconButton.styleFrom(
             minimumSize: const Size(52, 52),
             disabledBackgroundColor: colorScheme.surfaceContainerHighest,
@@ -795,12 +1037,14 @@ class _CapturedPhotoPreview extends StatelessWidget {
   const _CapturedPhotoPreview({
     required this.photoBytes,
     required this.isUploading,
+    required this.isLocating,
     required this.onRetake,
     required this.onContinue,
   });
 
   final Uint8List photoBytes;
   final bool isUploading;
+  final bool isLocating;
   final VoidCallback? onRetake;
   final VoidCallback? onContinue;
 
@@ -831,7 +1075,7 @@ class _CapturedPhotoPreview extends StatelessWidget {
                   const Align(
                     alignment: Alignment.centerLeft,
                     child: StatusChip(
-                      label: 'PHOTO CAPTURED',
+                      label: 'PHOTO READY',
                       backgroundColor: Color(0xE6FFFFFF),
                       foregroundColor: Color(0xFF1D4ED8),
                     ),
@@ -864,7 +1108,11 @@ class _CapturedPhotoPreview extends StatelessWidget {
                   ),
                   const SizedBox(height: 12),
                   PrimaryButton(
-                    label: isUploading ? 'Uploading...' : 'Continue',
+                    label: isLocating
+                        ? 'Getting location...'
+                        : isUploading
+                            ? 'Uploading...'
+                            : 'Continue',
                     icon: isUploading ? null : Icons.arrow_forward_rounded,
                     onPressed: onContinue,
                   ),
@@ -873,22 +1121,24 @@ class _CapturedPhotoPreview extends StatelessWidget {
             ),
           ),
           if (isUploading)
-            const Positioned.fill(
+            Positioned.fill(
               child: ColoredBox(
-                color: Color(0x990F172A),
+                color: const Color(0x990F172A),
                 child: Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      SizedBox(
+                      const SizedBox(
                         width: 40,
                         height: 40,
                         child: CircularProgressIndicator(color: Colors.white),
                       ),
-                      SizedBox(height: 16),
+                      const SizedBox(height: 16),
                       Text(
-                        'Uploading image...',
-                        style: TextStyle(
+                        isLocating
+                            ? 'Getting your location...'
+                            : 'Uploading image...',
+                        style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w800,
                         ),

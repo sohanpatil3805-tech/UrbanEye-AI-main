@@ -1,10 +1,12 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
 
@@ -40,6 +42,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Local dashboards can run on changing LAN hosts/ports. Deployed servers can
+# restrict this comma-separated list; this API does not use cookie credentials.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        origin.strip()
+        for origin in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")
+        if origin.strip()
+    ],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Accept", "Content-Type", "Authorization"],
+)
+
 locations: list[LocationPayload] = []
 events: list[EventResponse] = []
 
@@ -57,6 +73,7 @@ def root() -> dict[str, str]:
 
 
 @app.get("/health", tags=["Health"])
+@app.get("/ping", tags=["Health"])
 def health() -> dict[str, str]:
     return {"status": "healthy"}
 
