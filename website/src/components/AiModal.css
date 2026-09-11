@@ -17,7 +17,7 @@
 .ai-modal-content {
   width: 100%;
   max-width: 960px;
-  background: rgba(13, 17, 30, 0.95);
+  background: var(--card-bg);
   border: 1px solid var(--accent-primary);
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8), 0 0 30px rgba(169, 128, 91, 0.15);
   border-radius: 20px;
@@ -32,8 +32,8 @@
   align-items: center;
   justify-content: space-between;
   padding: 1.2rem 1.8rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--border-color);
+  background: rgba(169, 128, 91, 0.02);
 }
 
 .ai-title-wrap {
@@ -64,14 +64,14 @@
 .ai-modal-header h2 {
   font-size: 1.3rem;
   font-weight: 700;
-  color: #FFFFFF;
+  color: var(--text-primary);
   margin: 0;
 }
 
 .close-btn {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: #A0AEC0;
+  background: rgba(169, 128, 91, 0.05);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
   padding: 0.5rem;
   border-radius: 50%;
   cursor: pointer;
@@ -115,7 +115,7 @@
 .vp-tag {
   font-size: 0.85rem;
   font-weight: 600;
-  color: #A0AEC0;
+  color: var(--text-secondary);
   display: flex;
   align-items: center;
   gap: 0.4rem;
@@ -237,8 +237,8 @@
 }
 
 .metric-chip {
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(169, 128, 91, 0.05);
+  border: 1px solid var(--border-color);
   padding: 0.6rem;
   border-radius: 10px;
   display: flex;
@@ -248,13 +248,13 @@
 
 .m-label {
   font-size: 0.72rem;
-  color: #A0AEC0;
+  color: var(--text-secondary);
 }
 
 .m-val {
   font-size: 0.95rem;
   font-weight: 700;
-  color: #FFFFFF;
+  color: var(--text-primary);
 }
 
 /* Telemetry Card */
@@ -274,7 +274,7 @@
 .telemetry-header h3 {
   font-size: 1rem;
   font-weight: 700;
-  color: #FFFFFF;
+  color: var(--text-primary);
   margin: 0;
   display: flex;
   align-items: center;
@@ -303,7 +303,7 @@
   justify-content: space-around;
   margin-top: 0.5rem;
   font-size: 0.72rem;
-  color: #A0AEC0;
+  color: var(--text-secondary);
 }
 
 .legend-item {
@@ -328,8 +328,8 @@
 }
 
 .detail-item {
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(169, 128, 91, 0.05);
+  border: 1px solid var(--border-color);
   padding: 0.6rem 0.8rem;
   border-radius: 10px;
   display: flex;
@@ -339,7 +339,7 @@
 
 .d-label {
   font-size: 0.75rem;
-  color: #A0AEC0;
+  color: var(--text-secondary);
   display: flex;
   align-items: center;
   gap: 0.3rem;
@@ -348,7 +348,7 @@
 .d-val {
   font-size: 0.88rem;
   font-weight: 600;
-  color: #FFF;
+  color: var(--text-primary);
 }
 
 .font-mono {

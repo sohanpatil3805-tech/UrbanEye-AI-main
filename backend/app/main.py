@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
 
-from .models import EventPayload, EventResponse, LocationPayload, UploadResponse
+from .models import EventPayload, EventResponse, LocationPayload, UploadResponse, StatusUpdatePayload
 from .services.detector import run_yolov8_stub
 from .services.firebase import publish_event_placeholder
 from .services.yolo_service import (
@@ -218,3 +218,11 @@ def create_event(payload: EventPayload) -> EventResponse:
 @app.get("/events", response_model=list[EventResponse], tags=["Events"])
 def list_events() -> list[EventResponse]:
     return events
+
+@app.put("/events/{event_id}/status", response_model=EventResponse, tags=["Events"])
+def update_event_status(event_id: int, payload: StatusUpdatePayload) -> EventResponse:
+    for event in events:
+        if event.id == event_id:
+            event.status = payload.status
+            return event
+    raise HTTPException(status_code=404, detail="Event not found")

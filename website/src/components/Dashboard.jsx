@@ -7,7 +7,7 @@ import { MapPin, BarChart2, Bell, AlertTriangle, Cpu, Layers, Sun, Moon, Shield,
 import AiModal from './AiModal';
 import MunicipalAnalytics from './MunicipalAnalytics';
 import ThemeToggle from './ThemeToggle';
-import { getEvents, hasValidCoordinates } from '../services/api';
+import { getEvents, hasValidCoordinates, updateEventStatus } from '../services/api';
 import './Dashboard.css';
 
 delete L.Icon.Default.prototype._getIconUrl;
@@ -115,8 +115,16 @@ const Dashboard = () => {
     localStorage.setItem('urbaneye_map_theme', mode);
   };
 
-  const handleUpdateStatus = () => {
-    setError('Incident status updates are not available from the backend yet.');
+  const handleUpdateStatus = async (eventId, newStatus) => {
+    try {
+      await updateEventStatus(eventId, newStatus);
+      setEvents(prev => prev.map(e => e.id === eventId ? { ...e, status: newStatus } : e));
+      if (selectedEvent?.id === eventId) {
+        setSelectedEvent(prev => ({ ...prev, status: newStatus }));
+      }
+    } catch (err) {
+      setError('Failed to update event status on the server.');
+    }
   };
 
   const criticalEvents = events.filter(e => e.severity === 'critical').length;

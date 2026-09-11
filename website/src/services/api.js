@@ -83,3 +83,17 @@ export async function getEvents({ signal } = {}) {
     .map(normalizeEvent)
     .sort((first, second) => new Date(second.timestamp) - new Date(first.timestamp));
 }
+
+export async function updateEventStatus(eventId, status) {
+  const response = await fetch(`${EVENTS_URL}/${eventId}/status`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: JSON.stringify({ status })
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to update event status');
+  }
+
+  return response.json();
+}

@@ -37,6 +37,10 @@ class EventPayload(BaseModel):
 
 class EventResponse(EventPayload):
     id: int
+    status: Literal["pending", "dispatched", "repaired"] = "pending"
+
+class StatusUpdatePayload(BaseModel):
+    status: Literal["pending", "dispatched", "repaired"]
 
 
 class UploadResponse(BaseModel):
