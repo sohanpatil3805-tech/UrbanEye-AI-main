@@ -43,7 +43,7 @@ const Features = () => {
     },
     {
       title: "Smart Event Detection",
-      description: "Capture images of road anomalies and process them using our YOLOv8-powered computer vision pipeline.",
+      description: "Capture images of road anomalies and process them using our YOLO11-powered computer vision pipeline.",
       icon: "👁️"
     },
     {

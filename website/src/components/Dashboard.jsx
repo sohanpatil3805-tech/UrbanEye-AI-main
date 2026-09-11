@@ -251,7 +251,7 @@ const Dashboard = () => {
                 <div className="map-panel-header">
                   <div className="map-header-title">
                     <h2><MapPin size={18} className="text-cyan" /> Geographic Anomaly Distribution</h2>
-                    <span className="hint-text">Click marker to inspect YOLOv8 telemetry</span>
+                    <span className="hint-text">Click marker to inspect YOLO11 telemetry</span>
                   </div>
 
                   {/* Independent Map Light/Dark Theme Switcher */}

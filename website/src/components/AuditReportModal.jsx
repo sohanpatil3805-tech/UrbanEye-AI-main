@@ -62,7 +62,7 @@ const AuditReportModal = ({ events, estBudgetLakhs, onClose }) => {
             <p>
               This road infrastructure audit report synthesizes telemetry gathered by the UrbanEye AI 
               decentralized mobile edge sensing network across primary municipal transit corridors. 
-              Automated computer vision classification models (YOLOv8) and 3-axis accelerometer sensor fusion 
+              Automated computer vision classification models (YOLO11) and 3-axis accelerometer sensor fusion 
               have identified <strong>{events.length} active road anomalies</strong> requiring PWD maintenance intervention.
             </p>
           </section>
