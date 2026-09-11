@@ -2,18 +2,21 @@ import 'dart:async';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+
+import 'dashcam_service.dart';
 
 enum MonitoringState { idle, starting, active, stopping, error }
 
 /// Owns a monitoring camera independently of the manual capture flow.
 ///
-/// Supplying [onFrame] opts into image streaming for a future AI integration.
-/// Frames are dropped while its previous callback is still running, including
-/// across restarts. Without a callback, only the live preview is started.
+/// [dashcam] enables local inference and recording. [onFrame] is also available
+/// for isolated camera tests and custom stream consumers.
 class MonitoringController extends ChangeNotifier {
-  MonitoringController({this.onFrame});
+  MonitoringController({this.onFrame, this.dashcam});
 
   final Future<void> Function(CameraImage image)? onFrame;
+  final DashcamService? dashcam;
 
   MonitoringState _state = MonitoringState.idle;
   CameraController? _cameraController;
@@ -22,6 +25,9 @@ class MonitoringController extends ChangeNotifier {
   int _generation = 0;
   bool _disposed = false;
   bool _processingFrame = false;
+  int _frameCount = 0;
+  final _frameClock = Stopwatch();
+  int _lastFrameMs = -100;
 
   MonitoringState get state => _state;
   CameraController? get cameraController => _cameraController;
@@ -41,6 +47,7 @@ class MonitoringController extends ChangeNotifier {
 
   Future<void> stop() {
     if (_disposed) return _pending;
+    dashcam?.cancelProcessing();
     final generation = ++_generation;
     final operation = _enqueue(() async {
       final released = await _releaseCamera();
@@ -67,6 +74,10 @@ class MonitoringController extends ChangeNotifier {
             MonitoringState.error, 'No camera is available on this device.');
         return;
       }
+      if (dashcam != null &&
+          !cameras.any((c) => c.lensDirection == CameraLensDirection.back)) {
+        throw CameraException('RearCameraUnavailable', 'Rear camera required');
+      }
       final camera = CameraController(
         cameras.firstWhere(
           (camera) => camera.lensDirection == CameraLensDirection.back,
@@ -74,6 +85,9 @@ class MonitoringController extends ChangeNotifier {
         ),
         ResolutionPreset.medium,
         enableAudio: false,
+        imageFormatGroup: defaultTargetPlatform == TargetPlatform.iOS
+            ? ImageFormatGroup.bgra8888
+            : ImageFormatGroup.yuv420,
       );
       _cameraController = camera;
       await camera.initialize();
@@ -85,7 +99,20 @@ class MonitoringController extends ChangeNotifier {
         throw CameraException('CameraError', camera.value.errorDescription);
       }
       camera.addListener(_handleCameraError);
-      if (onFrame != null) {
+      if (dashcam != null) {
+        await camera.lockCaptureOrientation(DeviceOrientation.portraitUp);
+        await dashcam!.initialize();
+        if (!_isCurrent(generation)) {
+          await _releaseCamera();
+          return;
+        }
+      }
+      _frameCount = 0;
+      _lastFrameMs = -100;
+      _frameClock
+        ..reset()
+        ..start();
+      if (onFrame != null || dashcam != null) {
         if (!camera.supportsImageStreaming()) {
           throw CameraException(
               'StreamingUnsupported', 'Streaming unavailable');
@@ -93,6 +120,15 @@ class MonitoringController extends ChangeNotifier {
         await camera.startImageStream(
           (image) => unawaited(_processFrame(image, generation)),
         );
+        if (dashcam != null) {
+          // CameraController rejects startImageStream during recording. Move
+          // from the initial stream to Camera2's combined recording callback.
+          await camera.stopImageStream();
+          await camera.startVideoRecording(
+            onAvailable: (image) => unawaited(_processFrame(image, generation)),
+            enablePersistentRecording: false,
+          );
+        }
       }
       if (!_isCurrent(generation)) {
         await _releaseCamera();
@@ -108,14 +144,39 @@ class MonitoringController extends ChangeNotifier {
   }
 
   Future<void> _processFrame(CameraImage image, int generation) async {
-    if (!_isCurrent(generation) ||
-        _state != MonitoringState.active ||
-        _processingFrame) {
+    if (!_isCurrent(generation) || _state != MonitoringState.active) {
       return;
     }
+    if (dashcam != null) {
+      // At 30 camera FPS every third frame targets 10 inference FPS. The time
+      // gate caps faster cameras at 15 FPS; busy frames are never queued.
+      if (++_frameCount % 3 != 0 ||
+          _frameClock.elapsedMilliseconds - _lastFrameMs < 66) {
+        return;
+      }
+    }
+    if (_processingFrame) return;
+    _lastFrameMs = _frameClock.elapsedMilliseconds;
     _processingFrame = true;
     try {
-      await onFrame!(image);
+      if (dashcam != null) {
+        final camera = _cameraController!;
+        final orientation = camera.value.recordingOrientation ??
+            camera.value.lockedCaptureOrientation ??
+            camera.value.deviceOrientation;
+        final degrees = switch (orientation) {
+          DeviceOrientation.portraitUp => 0,
+          DeviceOrientation.landscapeLeft => 90,
+          DeviceOrientation.portraitDown => 180,
+          DeviceOrientation.landscapeRight => 270,
+        };
+        final rotation = defaultTargetPlatform == TargetPlatform.iOS
+            ? 0
+            : (camera.description.sensorOrientation - degrees + 360) % 360;
+        await dashcam!.process(image, rotation);
+      } else {
+        await onFrame!(image);
+      }
     } catch (_) {
       if (_isCurrent(generation)) {
         _fail(
@@ -138,6 +199,7 @@ class MonitoringController extends ChangeNotifier {
 
   void _fail(String message) {
     ++_generation;
+    dashcam?.cancelProcessing();
     unawaited(_enqueue(() async {
       await _releaseCamera();
     }));
@@ -147,8 +209,20 @@ class MonitoringController extends ChangeNotifier {
   Future<bool> _releaseCamera() async {
     final camera = _cameraController;
     _cameraController = null;
-    if (camera == null) return true;
+    if (camera == null) {
+      await dashcam?.stop();
+      return true;
+    }
     camera.removeListener(_handleCameraError);
+    var released = true;
+    if (camera.value.isRecordingVideo) {
+      try {
+        final recording = await camera.stopVideoRecording();
+        await dashcam?.saveRecording(recording);
+      } catch (_) {
+        released = false;
+      }
+    }
     if (camera.value.isStreamingImages) {
       try {
         await camera.stopImageStream();
@@ -158,10 +232,12 @@ class MonitoringController extends ChangeNotifier {
     }
     try {
       await camera.dispose();
-      return true;
     } catch (_) {
-      return false;
+      released = false;
     }
+    await dashcam?.stop();
+    _frameClock.stop();
+    return released;
   }
 
   Future<void> _enqueue(Future<void> Function() operation) {
@@ -189,6 +265,13 @@ class MonitoringController extends ChangeNotifier {
       if (error.code == 'StreamingUnsupported') {
         return 'Camera image streaming is unavailable on this device.';
       }
+      if (error.code == 'RearCameraUnavailable') {
+        return 'Monitoring requires a rear camera.';
+      }
+    }
+    if (dashcam != null) {
+      return 'Unable to start the dashcam. Check the local model and camera '
+          'recording support. $error';
     }
     return 'Unable to start the camera. Please try again.';
   }
@@ -198,8 +281,10 @@ class MonitoringController extends ChangeNotifier {
     if (_disposed) return;
     _disposed = true;
     ++_generation;
+    dashcam?.cancelProcessing();
     unawaited(_enqueue(() async {
       await _releaseCamera();
+      dashcam?.dispose();
     }));
     super.dispose();
   }

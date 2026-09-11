@@ -17,6 +17,13 @@ subprojects {
 }
 subprojects {
     project.evaluationDependsOn(":app")
+    // tflite_flutter declares Java 11 but leaves Kotlin to the host JDK default.
+    // Match the plugin's bytecode target when building with AGP 9 / JDK 25.
+    if (project.name == "tflite_flutter") {
+        tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+            compilerOptions.jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
+        }
+    }
 }
 
 tasks.register<Delete>("clean") {

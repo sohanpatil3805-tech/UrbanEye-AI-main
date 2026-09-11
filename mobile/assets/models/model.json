@@ -1,0 +1,35 @@
+{
+  "source": "backend/app/models/best.pt",
+  "source_sha256": "ba71887b3aeba6a67e64b99f4465012ca0f5519ef11587d873cfe809448a26e2",
+  "source_labels": {
+    "0": "longitudinal_crack",
+    "1": "transverse_crack",
+    "2": "alligator_crack",
+    "3": "pothole"
+  },
+  "selected_source_class": 3,
+  "labels": [
+    "Pothole"
+  ],
+  "input_shape": [
+    1,
+    320,
+    320,
+    3
+  ],
+  "input_type": "float32",
+  "normalization": "RGB / 255, letterbox 114",
+  "output_shape": [
+    1,
+    2100,
+    5
+  ],
+  "output_format": "normalized [x1,y1,x2,y2,confidence], no NMS",
+  "weights": "float16",
+  "validation_max_abs_errors": [
+    0.000719904899597168,
+    0.0008291006088256836,
+    0.0023906826972961426
+  ],
+  "tflite_sha256": "08825a701164fa1bddb9be582e116c1d1ca381ea7532c3ba3ac130f94342ccd4"
+}

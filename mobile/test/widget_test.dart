@@ -18,7 +18,13 @@ void main() {
     await tester.tap(find.text('Start Monitoring'));
     await tester.pumpAndSettle();
     expect(find.byType(MonitoringScreen), findsOneWidget);
-    expect(find.text('Ready to Monitor'), findsOneWidget);
+    expect(
+        tester
+            .widget<MonitoringScreen>(find.byType(MonitoringScreen))
+            .autoStart,
+        isTrue);
+    // No native camera in widget tests: auto-start surfaces the camera error.
+    expect(find.text('Monitoring Unavailable'), findsOneWidget);
     expect(find.text('Stop Monitoring'), findsOneWidget);
     expect(find.byType(CameraScreen), findsNothing);
     await tester.tap(find.byTooltip('Back'));

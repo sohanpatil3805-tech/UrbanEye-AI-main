@@ -1,0 +1,12 @@
+# Use an isolated environment; do not install into the FastAPI runtime.
+torch==2.14.0
+ultralytics==8.4.138
+tensorflow==2.20.0
+tf-keras==2.20.1
+onnx==1.19.0
+onnxruntime==1.30.0
+onnx2tf==1.28.2
+onnx_graphsurgeon==0.6.1
+sng4onnx==2.0.1
+ai-edge-litert==2.2.0
+onnxslim==0.1.96

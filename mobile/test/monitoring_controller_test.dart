@@ -1,11 +1,14 @@
 import 'dart:async';
 
+import 'package:camera/camera.dart' show CameraImage;
+
 // Exercise the camera plugin's platform seam without a production dependency.
 // ignore: depend_on_referenced_packages
 import 'package:camera_platform_interface/camera_platform_interface.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:urbaneye_mobile/services/monitoring_controller.dart';
+import 'package:urbaneye_mobile/services/dashcam_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -235,6 +238,107 @@ void main() {
     expect(platform.disposedIds, [1]);
     expect(platform.streamStops, 1);
   });
+
+  test('dashcam starts stream then combined video and saves before release',
+      () async {
+    controller.dispose();
+    await controller.stop();
+    final dashcam = _FakeDashcamService();
+    controller = MonitoringController(dashcam: dashcam);
+    await controller.start();
+    expect(controller.state, MonitoringState.active);
+    expect(platform.streamStarts, 1);
+    expect(platform.streamStops, 1);
+    expect(platform.videoStarts, 1);
+    expect(controller.cameraController!.value.isRecordingVideo, isTrue);
+    expect(platform.created.single.lensDirection, CameraLensDirection.back);
+    await controller.stop();
+    expect(platform.videoStops, 1);
+    expect(dashcam.saved, 1);
+    expect(dashcam.stops, 1);
+    expect(platform.events, ['create:1', 'video-stop', 'dispose:1']);
+    expect(controller.state, MonitoringState.idle);
+  });
+
+  test('dashcam processes every third frame and drops work while busy',
+      () async {
+    controller.dispose();
+    await controller.stop();
+    final dashcam = _FakeDashcamService();
+    controller = MonitoringController(dashcam: dashcam);
+    await controller.start();
+    platform.videoFrame!(_frame);
+    platform.videoFrame!(_frame);
+    expect(dashcam.frames, 0);
+    final pending = Completer<void>();
+    dashcam.pending = pending.future;
+    platform.videoFrame!(_frame);
+    expect(dashcam.frames, 1);
+    await Future<void>.delayed(const Duration(milliseconds: 70));
+    for (var i = 0; i < 6; i++) {
+      platform.videoFrame!(_frame);
+    }
+    expect(dashcam.frames, 1);
+    pending.complete();
+    await _flush();
+    dashcam.pending = null;
+    for (var i = 0; i < 3; i++) {
+      platform.videoFrame!(_frame);
+    }
+    await _flush();
+    expect(dashcam.frames, 2);
+    await controller.stop();
+    platform.videoFrame!(_frame);
+    expect(dashcam.frames, 2);
+  });
+
+  test('recording failure never presents monitoring as active', () async {
+    controller.dispose();
+    await controller.stop();
+    final dashcam = _FakeDashcamService();
+    controller = MonitoringController(dashcam: dashcam);
+    platform.videoError = PlatformException(code: 'recording-unsupported');
+    await controller.start();
+    expect(controller.state, MonitoringState.error);
+    expect(platform.disposedIds, [1]);
+    expect(dashcam.stops, 1);
+    platform.videoError = null;
+    await controller.start();
+    expect(controller.state, MonitoringState.active);
+  });
+
+  test('dashcam requires rear lens instead of recording a selfie', () async {
+    controller.dispose();
+    await controller.stop();
+    controller = MonitoringController(dashcam: _FakeDashcamService());
+    platform.cameras = [_frontCamera];
+    await controller.start();
+    expect(controller.state, MonitoringState.error);
+    expect(controller.errorMessage, contains('rear camera'));
+    expect(platform.created, isEmpty);
+  });
+}
+
+class _FakeDashcamService extends DashcamService {
+  int frames = 0, saved = 0, stops = 0;
+  Future<void>? pending;
+  @override
+  Future<void> initialize() async {}
+  @override
+  Future<void> process(CameraImage image, int rotation) async {
+    frames++;
+    await pending;
+  }
+
+  @override
+  Future<void> saveRecording(XFile file) async {
+    saved++;
+  }
+
+  @override
+  Future<void> stop() async {
+    stops++;
+  }
 }
 
 Future<void> _flush() => Future<void>.delayed(Duration.zero);
@@ -264,6 +368,9 @@ class _MonitoringCameraPlatform extends CameraPlatform {
   int discoveryCalls = 0;
   int streamStarts = 0;
   int streamStops = 0;
+  int videoStarts = 0, videoStops = 0;
+  PlatformException? videoError;
+  void Function(CameraImageData)? videoFrame;
   final created = <CameraDescription>[];
   final settings = <MediaSettings?>[];
   final disposedIds = <int>[];
@@ -326,6 +433,24 @@ class _MonitoringCameraPlatform extends CameraPlatform {
 
   @override
   bool supportsImageStreaming() => true;
+
+  @override
+  Future<void> lockCaptureOrientation(
+      int cameraId, DeviceOrientation orientation) async {}
+
+  @override
+  Future<void> startVideoCapturing(VideoCaptureOptions options) async {
+    if (videoError != null) throw videoError!;
+    videoStarts++;
+    videoFrame = options.streamCallback;
+  }
+
+  @override
+  Future<XFile> stopVideoRecording(int cameraId) async {
+    videoStops++;
+    events.add('video-stop');
+    return XFile.fromData(Uint8List.fromList([1, 2, 3]), name: 'road.mp4');
+  }
 
   @override
   Stream<CameraImageData> onStreamedFrameAvailable(

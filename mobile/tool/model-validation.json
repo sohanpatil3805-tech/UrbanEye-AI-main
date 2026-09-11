@@ -1,0 +1,8 @@
+{
+  "images_checked": 10,
+  "max_abs_error": 0.001648545265197754,
+  "max_pothole_confidence": 0.8872976899147034,
+  "desktop_inference_ms": 23.37966499999311,
+  "note": "Conversion equivalence only; not an accuracy or Android FPS benchmark.",
+  "tflite_sha256": "08825a701164fa1bddb9be582e116c1d1ca381ea7532c3ba3ac130f94342ccd4"
+}

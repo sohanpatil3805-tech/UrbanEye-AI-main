@@ -50,7 +50,7 @@ class _UrbanEyeAppState extends State<UrbanEyeApp> {
         '/home': (context) => const HomeScreen(),
         '/gps': (context) => const LiveGpsScreen(),
         '/camera': (context) => const CameraScreen(),
-        '/monitoring': (context) => const MonitoringScreen(),
+        '/monitoring': (context) => const MonitoringScreen(autoStart: true),
         '/notifications': (context) => const NotificationsScreen(),
         '/settings': (context) => const SettingsScreen(),
         '/profile': (context) => ProfileScreen(

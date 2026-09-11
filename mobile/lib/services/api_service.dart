@@ -204,6 +204,55 @@ class ApiService {
     }
   }
 
+  /// Local inference already confirmed this incident; do not run /detect again.
+  Future<bool> uploadConfirmedEvent({
+    required double confidence,
+    required double latitude,
+    required double longitude,
+    required DateTime timestamp,
+    Future<void>? abortTrigger,
+  }) async {
+    if (!confidence.isFinite ||
+        confidence < 0 ||
+        confidence > 1 ||
+        !latitude.isFinite ||
+        latitude.abs() > 90 ||
+        !longitude.isFinite ||
+        longitude.abs() > 180) {
+      return false;
+    }
+    final abort = Completer<void>();
+    final timer = Timer(const Duration(seconds: 8), () {
+      if (!abort.isCompleted) abort.complete();
+    });
+    try {
+      final base = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
+      final request = http.AbortableRequest(
+          'POST', Uri.parse(base).resolve('events'),
+          abortTrigger: abortTrigger == null
+              ? abort.future
+              : Future.any([abort.future, abortTrigger]))
+        ..headers['Content-Type'] = 'application/json'
+        ..body = jsonEncode({
+          'event_type': 'pothole',
+          'confidence': confidence,
+          'latitude': latitude,
+          'longitude': longitude,
+          'timestamp': timestamp.toUtc().toIso8601String(),
+          'source': 'camera',
+        });
+      final response =
+          await _client.send(request).timeout(const Duration(seconds: 8));
+      await response.stream.drain<void>().timeout(const Duration(seconds: 8));
+      return response.statusCode >= 200 && response.statusCode < 300;
+    } catch (_) {
+      return false;
+    } finally {
+      timer.cancel();
+      if (!abort.isCompleted) abort.complete();
+    }
+  }
+
   /// Subclasses can retain a result without another HTTP client or upload path.
   @protected
   void handleDetectionResponse(http.Response response) {}
