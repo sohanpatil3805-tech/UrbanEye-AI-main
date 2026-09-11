@@ -239,7 +239,7 @@ void main() {
     expect(platform.streamStops, 1);
   });
 
-  test('dashcam starts stream then combined video and saves before release',
+  test('monitoring keeps image stream running and never starts video',
       () async {
     controller.dispose();
     await controller.stop();
@@ -248,15 +248,16 @@ void main() {
     await controller.start();
     expect(controller.state, MonitoringState.active);
     expect(platform.streamStarts, 1);
-    expect(platform.streamStops, 1);
-    expect(platform.videoStarts, 1);
-    expect(controller.cameraController!.value.isRecordingVideo, isTrue);
+    expect(platform.streamStops, 0);
+    expect(platform.videoStarts, 0);
+    expect(controller.cameraController!.value.isRecordingVideo, isFalse);
+    expect(controller.cameraController!.value.isStreamingImages, isTrue);
     expect(platform.created.single.lensDirection, CameraLensDirection.back);
     await controller.stop();
-    expect(platform.videoStops, 1);
-    expect(dashcam.saved, 1);
+    expect(platform.videoStops, 0);
+    expect(platform.streamStops, 1);
     expect(dashcam.stops, 1);
-    expect(platform.events, ['create:1', 'video-stop', 'dispose:1']);
+    expect(platform.events, ['create:1', 'dispose:1']);
     expect(controller.state, MonitoringState.idle);
   });
 
@@ -267,42 +268,48 @@ void main() {
     final dashcam = _FakeDashcamService();
     controller = MonitoringController(dashcam: dashcam);
     await controller.start();
-    platform.videoFrame!(_frame);
-    platform.videoFrame!(_frame);
+    platform.frames.add(_frame);
+    platform.frames.add(_frame);
+    await _flush();
     expect(dashcam.frames, 0);
     final pending = Completer<void>();
     dashcam.pending = pending.future;
-    platform.videoFrame!(_frame);
+    platform.frames.add(_frame);
+    await _flush();
     expect(dashcam.frames, 1);
     await Future<void>.delayed(const Duration(milliseconds: 70));
     for (var i = 0; i < 6; i++) {
-      platform.videoFrame!(_frame);
+      platform.frames.add(_frame);
     }
+    await _flush();
     expect(dashcam.frames, 1);
     pending.complete();
     await _flush();
     dashcam.pending = null;
     for (var i = 0; i < 3; i++) {
-      platform.videoFrame!(_frame);
+      platform.frames.add(_frame);
     }
     await _flush();
     expect(dashcam.frames, 2);
     await controller.stop();
-    platform.videoFrame!(_frame);
+    platform.frames.add(_frame);
+    await _flush();
     expect(dashcam.frames, 2);
   });
 
-  test('recording failure never presents monitoring as active', () async {
+  test('model failure is visible and allows retry without recording', () async {
     controller.dispose();
     await controller.stop();
     final dashcam = _FakeDashcamService();
     controller = MonitoringController(dashcam: dashcam);
-    platform.videoError = PlatformException(code: 'recording-unsupported');
+    dashcam.initializeError = StateError('Model unavailable');
     await controller.start();
     expect(controller.state, MonitoringState.error);
     expect(platform.disposedIds, [1]);
     expect(dashcam.stops, 1);
-    platform.videoError = null;
+    expect(controller.errorMessage, contains('Model unavailable'));
+    expect(platform.videoStarts, 0);
+    dashcam.initializeError = null;
     await controller.start();
     expect(controller.state, MonitoringState.active);
   });
@@ -320,19 +327,18 @@ void main() {
 }
 
 class _FakeDashcamService extends DashcamService {
-  int frames = 0, saved = 0, stops = 0;
+  int frames = 0, stops = 0;
+  Object? initializeError;
   Future<void>? pending;
   @override
-  Future<void> initialize() async {}
+  Future<void> initialize() async {
+    if (initializeError != null) throw initializeError!;
+  }
+
   @override
   Future<void> process(CameraImage image, int rotation) async {
     frames++;
     await pending;
-  }
-
-  @override
-  Future<void> saveRecording(XFile file) async {
-    saved++;
   }
 
   @override

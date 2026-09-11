@@ -148,20 +148,7 @@ class _MonitoringScreenState extends State<MonitoringScreen>
                           valueListenable: _controller.dashcam!.snapshot,
                           builder: (context, snapshot, _) => Padding(
                             padding: const EdgeInsets.only(bottom: 16),
-                            child: Column(children: [
-                              Text(
-                                  '${active ? "● REC · " : ""}${snapshot.fps.toStringAsFixed(1)} FPS · ${snapshot.gps}',
-                                  textAlign: TextAlign.center),
-                              Text(
-                                  '${snapshot.confirmed} confirmed · ${snapshot.uploaded} uploaded'),
-                              if (snapshot.notice != null)
-                                Text(snapshot.notice!,
-                                    textAlign: TextAlign.center),
-                              if (snapshot.recordingPath != null)
-                                SelectableText(
-                                    'Video saved: ${snapshot.recordingPath}',
-                                    textAlign: TextAlign.center),
-                            ]),
+                            child: _MonitoringDiagnostics(snapshot: snapshot),
                           ),
                         ),
                       PrimaryButton(
@@ -204,6 +191,44 @@ class _MonitoringScreenState extends State<MonitoringScreen>
         ),
       ),
     );
+  }
+}
+
+class _MonitoringDiagnostics extends StatelessWidget {
+  const _MonitoringDiagnostics({required this.snapshot});
+  final DashcamSnapshot snapshot;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Wrap(spacing: 14, runSpacing: 4, children: [
+        Text('Camera FPS: ${snapshot.cameraFps.toStringAsFixed(1)}'),
+        Text('AI FPS: ${snapshot.fps.toStringAsFixed(1)}'),
+        Text('Model Loaded: ${snapshot.modelLoaded ? "Yes" : "No"}'),
+        Text('Last Inference: ${snapshot.inferenceMs.toStringAsFixed(1)} ms'),
+        Text('Detections This Frame: ${snapshot.detections.length}'),
+        Text('Confirmed: ${snapshot.confirmed}'),
+        Text('Image Stream: ${snapshot.streaming ? "Running" : "Stopped"}'),
+        Text('Frames Received: ${snapshot.totalFrames}'),
+        Text(
+            'Peak Confidence: ${(snapshot.maxConfidence * 100).toStringAsFixed(1)}%'),
+        const Text('Confidence Threshold: 25%'),
+        Text('Images Uploaded: ${snapshot.uploaded}'),
+        Text('Backend Incidents: ${snapshot.backendIncidents}'),
+        Text('Pending Uploads: ${snapshot.pending}'),
+      ]),
+      const SizedBox(height: 8),
+      Text(snapshot.frameFormat),
+      Text(snapshot.gps),
+      if (snapshot.preview != null)
+        Row(children: [
+          Image.memory(snapshot.preview!,
+              width: 80, height: 80, gaplessPlayback: true),
+          const SizedBox(width: 8),
+          const Flexible(child: Text('AI input preview\nRGB · 320 × 320')),
+        ]),
+      if (snapshot.notice != null) Text(snapshot.notice!),
+    ]);
   }
 }
 

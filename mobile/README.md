@@ -2,15 +2,12 @@
 
 A new Flutter project.
 
-## AI dashcam
+## Start Monitoring: live detection
 
-**Start Monitoring** opens the rear camera immediately, starts an image stream,
-then switches to `startVideoRecording(onAvailable: ...)` for simultaneous video
-and inference. Flutter rejects `startImageStream` during a recording; the shared
-recording callback keeps inference running throughout the recording. Android
-uses `camera_android` (Camera2), because the CameraX implementation does not
-support the combined recording callback. Camera Ready and Gallery still use
-their existing `/detect` flow; the backend and checkpoint are unchanged.
+**Start Monitoring** opens the rear camera and keeps
+`CameraController.startImageStream()` running throughout the session. It does
+not record video or write images/logs to device storage. Camera Ready, Gallery,
+their shared ApiService, website, dashboard, and backend are unchanged.
 
 The bundled `assets/models/best.tflite` was converted from
 `backend/app/models/best.pt`. That checkpoint actually contains four classes;
@@ -34,23 +31,38 @@ box area: below 3.5%, 3.5–12%, and at least 12% of the frame. This is a visual
 size/proximity heuristic; a single-class pothole model cannot measure depth or
 physical damage severity.
 
-An incident requires confidence ≥50%, NMS IoU <0.45, and three consecutive
-observations matched at IoU >0.30. Each track reports once and survives up to
-1.5 seconds of occlusion. Uploads require a capture-time GPS fix no older than
-10 seconds and accuracy ≤50 meters. Missing/denied GPS pauses confirmation and
-uploads while local preview, inference, and recording continue. Only confirmed
-incident JSON goes to the existing **POST `/events`** endpoint, with coordinates,
-confidence, and capture timestamp; camera frames and video are not uploaded.
-Uploads are serialized with a 30-event bound and cancellation on stop. Failed
-events remain in the local log; automatic retries are avoided because the
-existing endpoint has no idempotency key.
+`Confirmed` increments on the first observation at confidence ≥25%, after NMS
+(IoU 0.45). Overlapping observations at IoU ≥0.30 refresh a ten-second duplicate
+window; continuous visibility produces only one confirmation. GPS, network
+access, and server inference never gate live boxes or confirmation.
 
-Video is silent and saved on stop to the app's Documents `dashcam/` directory,
-alongside a `.jsonl` GPS/confirmed-detection/upload-status log. The saved video
-path is shown on screen. Raw video does not have boxes burned in. Back navigation
-waits for video finalization; backgrounding stops and saves the session. Resume
-requires another Start. Sessions have no automatic retention/deletion policy.
-Android API 26 or later is required.
+Only newly confirmed frames are encoded as upright JPEGs in the worker isolate
+and sent to the existing **POST `/detect`**, using multipart `file`, latitude,
+longitude, confidence, severity, timestamp, and per-detection bounding boxes.
+The GPS timestamp and accuracy are included. Extra local metadata is also stored
+in a standard JPEG comment, preserving it in the image the backend already saves.
+The unchanged backend independently runs inference and populates `/events`;
+it ignores the extra multipart metadata and uses its own confidence/timestamp
+for events. The website reads these events on its existing **15-second poll**.
+Faster website updates or using local metadata as event fields would require
+changes outside this monitoring-only scope.
+
+GPS fixes must have valid coordinates and be within 30 seconds of the detection.
+There is no accuracy gate preventing indoor confirmation; actual accuracy is
+displayed and sent. Frames waiting for the first GPS fix remain in memory for
+up to 30 seconds, with at most 20 queued frames. No coordinates are invented.
+Uploads are serialized, time out after 60 seconds, and cancel on stop. Failed
+requests are shown on screen and not blindly retried because `/detect` is not
+idempotent. Backend re-inference can return zero events for an accepted image;
+the UI explicitly distinguishes images uploaded from backend incidents.
+
+Diagnostics show Camera FPS, AI FPS, Model Loaded, Last Inference (ms),
+Detections This Frame, Confirmed, Image Stream, Frames Received, Peak Confidence,
+GPS status, and upload status. A periodically refreshed RGB model-input thumbnail
+exposes bad conversion/orientation even when inference finds nothing. The model
+is reported loaded only after tensor checks and a successful warmup invocation.
+Background/Back stop streaming and release resources; resume requires another
+Start. Android API 26 or later is required.
 
 To reproduce the model (Python 3.13 was used):
 
@@ -68,8 +80,9 @@ images without uploading them. `tool/model-validation.json` contains the result.
 
 Validate from `mobile` with `flutter test --no-pub` and
 `flutter build apk --debug --no-pub`. For device acceptance, start monitoring,
-grant permissions, check REC and measured FPS, observe colored/confidence boxes,
-verify confirmed `/events` with GPS, then stop and play the saved MP4. Also test
+grant permissions, check Image Stream: Running and Model Loaded: Yes, observe
+colored/confidence boxes and increasing Confirmed, and verify image uploads
+create `/events` visible after the website's next poll. Also test
 rotation, background/Back, permission denial, offline backend, and a fresh
 Camera Ready capture and Gallery upload after monitoring. No physical Android
 device was connected during the automated checks.
@@ -82,8 +95,22 @@ flutter build apk --release --no-pub --target-platform android-arm64
 
 The output is `build/app/outputs/flutter-apk/app-release.apk`. This project still
 uses its existing debug signing configuration for release builds. Automated
-validation passed 124 Flutter tests and Dart analysis; the packaged TFLite model
+validation passed 136 Flutter tests and Dart analysis; the packaged TFLite model
 matched PyTorch on ten local images (maximum absolute difference 0.00165).
+
+Additional monitoring integration checks, from the repository root:
+
+```powershell
+.\.model-export\Scripts\python.exe mobile/tool/verify_live_frames.py
+.\backend\venv\Scripts\python.exe mobile/tool/verify_monitoring_backend.py
+```
+
+These test production Dart conversion of padded, rotated YUV420 planes around
+actual TFLite inference, confirmation/duplicate filtering, and the unchanged
+FastAPI image-to-event flow in an isolated instance. Reports go to `mobile/build`.
+The tested frame returned one pothole at 75.7% confidence, one confirmation and
+zero duplicate confirmations; its upload returned HTTP 200 and one pothole event.
+This is host-side verification, not a physical camera or Android FPS measurement.
 
 ## Backend URL
 

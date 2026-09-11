@@ -6,8 +6,17 @@ import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/services.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
+import 'package:image/image.dart' as img;
 
 import '../models/live_detection.dart';
+
+class InferenceResult {
+  const InferenceResult(this.detections, this.inferenceMs, this.maxConfidence,
+      {this.preview});
+  final List<LiveDetection> detections;
+  final double inferenceMs, maxConfidence;
+  final Uint8List? preview;
+}
 
 /// Owns a persistent isolate: conversion, inference and NMS never run on the UI.
 class YoloWorker {
@@ -15,7 +24,7 @@ class YoloWorker {
   ReceivePort? _responses;
   StreamSubscription<dynamic>? _subscription;
   SendPort? _commands;
-  Completer<List<LiveDetection>>? _pending;
+  Completer<Object>? _pending;
   Completer<void>? _closed;
 
   Future<void> initialize() async {
@@ -29,7 +38,7 @@ class YoloWorker {
         ready.complete();
       } else if (message == 'closed') {
         if (_closed?.isCompleted == false) _closed!.complete();
-      } else if (message is List<LiveDetection>) {
+      } else if (message is InferenceResult || message is Uint8List) {
         _pending?.complete(message);
         _pending = null;
       } else {
@@ -44,7 +53,9 @@ class YoloWorker {
           _workerMain,
           (
             _responses!.sendPort,
-            TransferableTypedData.fromList([bytes.buffer.asUint8List()]),
+            TransferableTypedData.fromList([
+              bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes)
+            ]),
           ),
           onError: _responses!.sendPort,
           errorsAreFatal: true);
@@ -55,11 +66,11 @@ class YoloWorker {
     }
   }
 
-  Future<List<LiveDetection>> detect(CameraImage image, int rotation) async {
+  Future<InferenceResult> detect(CameraImage image, int rotation) async {
     if (_commands == null || _pending != null) {
       throw StateError('Inference worker unavailable or busy');
     }
-    final result = Completer<List<LiveDetection>>();
+    final result = Completer<Object>();
     _pending = result;
     _commands!.send(CameraFrame(
       image.width,
@@ -74,7 +85,17 @@ class YoloWorker {
               ))
           .toList(),
     ));
-    return result.future.timeout(const Duration(seconds: 5));
+    return await result.future.timeout(const Duration(seconds: 5))
+        as InferenceResult;
+  }
+
+  /// Called only after local confirmation, before the next frame is submitted.
+  Future<Uint8List> encodeEvidence() async {
+    if (_commands == null || _pending != null) throw StateError('Worker busy');
+    final result = Completer<Object>();
+    _pending = result;
+    _commands!.send('jpeg');
+    return await result.future.timeout(const Duration(seconds: 5)) as Uint8List;
   }
 
   Future<void> close() async {
@@ -133,6 +154,12 @@ void _workerMain((SendPort, TransferableTypedData) args) {
           'Expected float32 [1,320,320,3] -> [1,N,5] xyxy + score');
     }
     final buffer = Float32List(320 * 320 * 3);
+    buffer.fillRange(0, buffer.length, 114 / 255);
+    input.data = buffer.buffer.asUint8List();
+    interpreter.invoke(); // Validate operators before reporting Model Loaded.
+    CameraFrame? lastFrame;
+    List<Uint8List>? lastPlanes;
+    var frames = 0;
     args.$1.send(commands.sendPort);
     commands.listen((dynamic message) {
       if (message == null) {
@@ -142,10 +169,24 @@ void _workerMain((SendPort, TransferableTypedData) args) {
         return;
       }
       try {
+        if (message == 'jpeg') {
+          if (lastFrame == null) {
+            throw StateError('No inference frame available');
+          }
+          args.$1.send(encodeFrameJpeg(lastFrame!, lastPlanes!));
+          return;
+        }
         final frame = message as CameraFrame;
-        prepareInput(frame, buffer, 320);
+        final planes = frame.planes
+            .map((p) => p.data.materialize().asUint8List())
+            .toList();
+        prepareInput(frame, buffer, 320, planeBytes: planes);
+        lastFrame = frame;
+        lastPlanes = planes;
         input.data = buffer.buffer.asUint8List();
+        final timer = Stopwatch()..start();
         interpreter!.invoke();
+        timer.stop();
         final raw = output.data;
         final values =
             raw.buffer.asFloat32List(raw.offsetInBytes, raw.length ~/ 4);
@@ -153,7 +194,18 @@ void _workerMain((SendPort, TransferableTypedData) args) {
             frame.rotation % 180 == 0 ? frame.width : frame.height;
         final uprightHeight =
             frame.rotation % 180 == 0 ? frame.height : frame.width;
-        args.$1.send(decodeDetections(values, uprightWidth, uprightHeight));
+        var maxConfidence = 0.0;
+        for (var i = 4; i < values.length; i += 5) {
+          if (values[i].isFinite) {
+            maxConfidence = math.max(maxConfidence, values[i]);
+          }
+        }
+        args.$1.send(InferenceResult(
+          decodeDetections(values, uprightWidth, uprightHeight),
+          timer.elapsedMicroseconds / 1000,
+          maxConfidence,
+          preview: frames++ % 30 == 0 ? encodeInputPreview(buffer) : null,
+        ));
       } catch (error) {
         args.$1.send(error.toString());
       }
@@ -167,8 +219,9 @@ void _workerMain((SendPort, TransferableTypedData) args) {
 
 /// Fused stride-aware YUV/BGRA conversion, rotation and letterbox sampling.
 /// No full-resolution RGB image or per-pixel objects are allocated.
-void prepareInput(CameraFrame frame, Float32List target, int size) {
-  final planes =
+void prepareInput(CameraFrame frame, Float32List target, int size,
+    {List<Uint8List>? planeBytes}) {
+  final planes = planeBytes ??
       frame.planes.map((p) => p.data.materialize().asUint8List()).toList();
   final width = frame.rotation % 180 == 0 ? frame.width : frame.height;
   final height = frame.rotation % 180 == 0 ? frame.height : frame.width;
@@ -219,15 +272,23 @@ void prepareInput(CameraFrame frame, Float32List target, int size) {
   }
 }
 
-List<LiveDetection> decodeDetections(
-    Float32List values, int width, int height) {
+List<LiveDetection> decodeDetections(Float32List values, int width, int height,
+    {double threshold = 0.25}) {
   final scale = math.min(320 / width, 320 / height);
   final padX = (320 - width * scale) / 2;
   final padY = (320 - height * scale) / 2;
   final candidates = <LiveDetection>[];
   for (var i = 0; i + 4 < values.length; i += 5) {
     final score = values[i + 4];
-    if (!score.isFinite || score < 0.5 || score > 1) continue;
+    if (!score.isFinite ||
+        score < threshold ||
+        score > 1 ||
+        !values[i].isFinite ||
+        !values[i + 1].isFinite ||
+        !values[i + 2].isFinite ||
+        !values[i + 3].isFinite) {
+      continue;
+    }
     final box = <double>[
       ((values[i] * 320 - padX) / (width * scale)).clamp(0, 1).toDouble(),
       ((values[i + 1] * 320 - padY) / (height * scale)).clamp(0, 1).toDouble(),
@@ -246,4 +307,58 @@ List<LiveDetection> decodeDetections(
     if (kept.length == 20) break;
   }
   return kept;
+}
+
+Uint8List encodeInputPreview(Float32List input) {
+  final image = img.Image(width: 320, height: 320, numChannels: 3);
+  var i = 0;
+  for (var y = 0; y < 320; y++) {
+    for (var x = 0; x < 320; x++) {
+      image.setPixelRgb(x, y, (input[i++] * 255).round(),
+          (input[i++] * 255).round(), (input[i++] * 255).round());
+    }
+  }
+  return img.encodeJpg(image, quality: 65);
+}
+
+/// Encode the corresponding upright camera frame in memory, with no file IO
+/// and no extra camera capture (which would interrupt image streaming).
+Uint8List encodeFrameJpeg(CameraFrame frame, List<Uint8List> planes) {
+  final width = frame.rotation % 180 == 0 ? frame.width : frame.height;
+  final height = frame.rotation % 180 == 0 ? frame.height : frame.width;
+  final image = img.Image(width: width, height: height, numChannels: 3);
+  for (var y = 0; y < height; y++) {
+    for (var x = 0; x < width; x++) {
+      final (sx, sy) = switch (frame.rotation) {
+        90 => (y, frame.height - 1 - x),
+        180 => (frame.width - 1 - x, frame.height - 1 - y),
+        270 => (frame.width - 1 - y, x),
+        _ => (x, y),
+      };
+      if (frame.bgra) {
+        final i = sy * frame.planes[0].rowStride + sx * 4;
+        image.setPixelRgb(
+            x, y, planes[0][i + 2], planes[0][i + 1], planes[0][i]);
+      } else {
+        if (planes.length != 3) {
+          throw StateError('Expected three YUV420 planes');
+        }
+        final yy = planes[0]
+            [sy * frame.planes[0].rowStride + sx * frame.planes[0].pixelStride];
+        final u = planes[1][(sy ~/ 2) * frame.planes[1].rowStride +
+                (sx ~/ 2) * frame.planes[1].pixelStride] -
+            128;
+        final v = planes[2][(sy ~/ 2) * frame.planes[2].rowStride +
+                (sx ~/ 2) * frame.planes[2].pixelStride] -
+            128;
+        image.setPixelRgb(
+            x,
+            y,
+            (yy + 1.402 * v).round().clamp(0, 255),
+            (yy - .344136 * u - .714136 * v).round().clamp(0, 255),
+            (yy + 1.772 * u).round().clamp(0, 255));
+      }
+    }
+  }
+  return img.encodeJpg(image, quality: 85);
 }

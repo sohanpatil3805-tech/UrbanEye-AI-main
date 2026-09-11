@@ -75,6 +75,49 @@ class DetectionTracker {
   void clear() => _tracks.clear();
 }
 
+/// Report a threshold crossing immediately, then suppress overlapping boxes
+/// until they have been absent for [cooldown]. Continued visibility refreshes
+/// the window, so a stationary test video cannot flood the backend.
+class LiveConfirmationFilter {
+  LiveConfirmationFilter(
+      {this.threshold = 0.25,
+      this.cooldown = const Duration(seconds: 10),
+      this.iouThreshold = 0.3});
+  final double threshold, iouThreshold;
+  final Duration cooldown;
+  final List<_Track> _recent = [];
+
+  List<LiveDetection> update(List<LiveDetection> detections, DateTime now) {
+    _recent.removeWhere((track) => now.difference(track.seen) > cooldown);
+    final confirmed = <LiveDetection>[];
+    for (final detection in detections) {
+      if (!detection.confidence.isFinite || detection.confidence < threshold) {
+        continue;
+      }
+      _Track? matched;
+      var best = iouThreshold;
+      for (final track in _recent) {
+        final overlap = detection.iou(track.detection);
+        if (overlap >= best) {
+          matched = track;
+          best = overlap;
+        }
+      }
+      if (matched != null) {
+        matched
+          ..detection = detection
+          ..seen = now;
+      } else {
+        confirmed.add(detection);
+        _recent.add(_Track(detection, now));
+      }
+    }
+    return confirmed;
+  }
+
+  void clear() => _recent.clear();
+}
+
 class _Track {
   _Track(this.detection, this.seen);
   LiveDetection detection;

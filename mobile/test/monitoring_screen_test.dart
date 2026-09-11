@@ -4,9 +4,49 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:urbaneye_mobile/screens/monitoring_screen.dart';
 import 'package:urbaneye_mobile/services/monitoring_controller.dart';
+import 'package:urbaneye_mobile/services/dashcam_service.dart';
+import 'package:urbaneye_mobile/models/live_detection.dart';
+import 'package:urbaneye_mobile/widgets/detection_painter.dart';
 import 'package:urbaneye_mobile/widgets/urbaneye_design_system.dart';
 
 void main() {
+  testWidgets('live diagnostics and boxes are visible without recording UI',
+      (tester) async {
+    final service = DashcamService();
+    service.snapshot.value = const DashcamSnapshot(
+      cameraFps: 30,
+      fps: 10,
+      modelLoaded: true,
+      streaming: true,
+      inferenceMs: 18,
+      confirmed: 2,
+      totalFrames: 30,
+      detections: [
+        LiveDetection([.2, .2, .4, .4], .94)
+      ],
+    );
+    final controller = _FakeMonitoringController(dashcam: service);
+    await _openMonitoring(tester, controller, size: const Size(320, 568));
+    await _tapControl(tester, 'Start Monitoring');
+    for (final text in [
+      'Camera FPS: 30.0',
+      'AI FPS: 10.0',
+      'Model Loaded: Yes',
+      'Last Inference: 18.0 ms',
+      'Detections This Frame: 1',
+      'Confirmed: 2',
+      'Image Stream: Running'
+    ]) {
+      expect(find.text(text), findsOneWidget);
+    }
+    expect(
+        find.byWidgetPredicate((widget) =>
+            widget is CustomPaint && widget.painter is DetectionPainter),
+        findsOneWidget);
+    expect(find.textContaining('REC'), findsNothing);
+    expect(find.textContaining('Video saved'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
   testWidgets('start and stop control the active indicator and live preview',
       (tester) async {
     final controller = _FakeMonitoringController();
@@ -214,6 +254,7 @@ Future<void> _tapControl(WidgetTester tester, String label,
 }
 
 class _FakeMonitoringController extends MonitoringController {
+  _FakeMonitoringController({super.dashcam});
   final preview = _PreviewCameraController();
   MonitoringState _state = MonitoringState.idle;
   String? _error;

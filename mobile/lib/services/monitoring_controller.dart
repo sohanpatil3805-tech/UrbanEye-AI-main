@@ -10,7 +10,7 @@ enum MonitoringState { idle, starting, active, stopping, error }
 
 /// Owns a monitoring camera independently of the manual capture flow.
 ///
-/// [dashcam] enables local inference and recording. [onFrame] is also available
+/// [dashcam] enables local live inference. [onFrame] is also available
 /// for isolated camera tests and custom stream consumers.
 class MonitoringController extends ChangeNotifier {
   MonitoringController({this.onFrame, this.dashcam});
@@ -46,7 +46,7 @@ class MonitoringController extends ChangeNotifier {
   }
 
   Future<void> stop() {
-    if (_disposed) return _pending;
+    if (_disposed || _state == MonitoringState.stopping) return _pending;
     dashcam?.cancelProcessing();
     final generation = ++_generation;
     final operation = _enqueue(() async {
@@ -100,7 +100,6 @@ class MonitoringController extends ChangeNotifier {
       }
       camera.addListener(_handleCameraError);
       if (dashcam != null) {
-        await camera.lockCaptureOrientation(DeviceOrientation.portraitUp);
         await dashcam!.initialize();
         if (!_isCurrent(generation)) {
           await _releaseCamera();
@@ -120,15 +119,7 @@ class MonitoringController extends ChangeNotifier {
         await camera.startImageStream(
           (image) => unawaited(_processFrame(image, generation)),
         );
-        if (dashcam != null) {
-          // CameraController rejects startImageStream during recording. Move
-          // from the initial stream to Camera2's combined recording callback.
-          await camera.stopImageStream();
-          await camera.startVideoRecording(
-            onAvailable: (image) => unawaited(_processFrame(image, generation)),
-            enablePersistentRecording: false,
-          );
-        }
+        dashcam?.setStreaming(camera.value.isStreamingImages);
       }
       if (!_isCurrent(generation)) {
         await _releaseCamera();
@@ -148,6 +139,7 @@ class MonitoringController extends ChangeNotifier {
       return;
     }
     if (dashcam != null) {
+      dashcam!.cameraFrame(image);
       // At 30 camera FPS every third frame targets 10 inference FPS. The time
       // gate caps faster cameras at 15 FPS; busy frames are never queued.
       if (++_frameCount % 3 != 0 ||
@@ -161,9 +153,7 @@ class MonitoringController extends ChangeNotifier {
     try {
       if (dashcam != null) {
         final camera = _cameraController!;
-        final orientation = camera.value.recordingOrientation ??
-            camera.value.lockedCaptureOrientation ??
-            camera.value.deviceOrientation;
+        final orientation = camera.value.deviceOrientation;
         final degrees = switch (orientation) {
           DeviceOrientation.portraitUp => 0,
           DeviceOrientation.landscapeLeft => 90,
@@ -177,10 +167,9 @@ class MonitoringController extends ChangeNotifier {
       } else {
         await onFrame!(image);
       }
-    } catch (_) {
+    } catch (error) {
       if (_isCurrent(generation)) {
-        _fail(
-            'Unable to process camera images. Please start monitoring again.');
+        _fail('Unable to process camera images: $error');
       }
     } finally {
       _processingFrame = false;
@@ -215,14 +204,6 @@ class MonitoringController extends ChangeNotifier {
     }
     camera.removeListener(_handleCameraError);
     var released = true;
-    if (camera.value.isRecordingVideo) {
-      try {
-        final recording = await camera.stopVideoRecording();
-        await dashcam?.saveRecording(recording);
-      } catch (_) {
-        released = false;
-      }
-    }
     if (camera.value.isStreamingImages) {
       try {
         await camera.stopImageStream();
@@ -235,7 +216,11 @@ class MonitoringController extends ChangeNotifier {
     } catch (_) {
       released = false;
     }
-    await dashcam?.stop();
+    try {
+      await dashcam?.stop();
+    } catch (_) {
+      released = false;
+    }
     _frameClock.stop();
     return released;
   }
@@ -270,8 +255,7 @@ class MonitoringController extends ChangeNotifier {
       }
     }
     if (dashcam != null) {
-      return 'Unable to start the dashcam. Check the local model and camera '
-          'recording support. $error';
+      return 'Unable to start live detection: $error';
     }
     return 'Unable to start the camera. Please try again.';
   }
