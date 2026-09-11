@@ -5,11 +5,7 @@ import './AiModal.css';
 const AiModal = ({ event, onClose, onUpdateStatus }) => {
   if (!event) return null;
 
-<<<<<<< HEAD
   const telemetry = Array.isArray(event.telemetry) ? event.telemetry : [];
-=======
-  const telemetry = event.telemetry || [];
->>>>>>> feature/dashboard-map
 
   // Calculate SVG line paths for Accelerometer X, Y, Z
   const svgWidth = 400;
@@ -22,7 +18,6 @@ const AiModal = ({ event, onClose, onUpdateStatus }) => {
     return `${x},${y}`;
   }).join(' ') : '';
 
-<<<<<<< HEAD
   const pointsX = pointsFor('x');
   const pointsY = pointsFor('y');
   const pointsZ = pointsFor('z');
@@ -32,21 +27,6 @@ const AiModal = ({ event, onClose, onUpdateStatus }) => {
   const coordinates = Number.isFinite(event.latitude) && Number.isFinite(event.longitude)
     ? `${event.latitude.toFixed(4)}, ${event.longitude.toFixed(4)}`
     : 'Not available';
-=======
-  const pointsY = telemetry.map((pt, idx) => {
-    const x = (idx / (telemetry.length - 1)) * (svgWidth - 40) + 20;
-    const y = svgHeight - 20 - (pt.y / maxVal) * (svgHeight - 40);
-    return `${x},${y}`;
-  }).join(' ');
-
-  const pointsZ = telemetry.map((pt, idx) => {
-    const x = (idx / (telemetry.length - 1)) * (svgWidth - 40) + 20;
-    const y = svgHeight - 20 - (pt.z / maxVal) * (svgHeight - 40);
-    return `${x},${y}`;
-  }).join(' ');
-
-  const peakY = telemetry.length > 0 ? Math.max(...telemetry.map(t => t.y)).toFixed(2) : 'N/A';
->>>>>>> feature/dashboard-map
 
   return (
     <div className="ai-modal-overlay" onClick={onClose}>
@@ -104,19 +84,11 @@ const AiModal = ({ event, onClose, onUpdateStatus }) => {
             <div className="cv-metrics-row">
               <div className="metric-chip">
                 <span className="m-label">Est. Depth</span>
-<<<<<<< HEAD
                 <span className="m-val">{event.depth_cm ?? 'N/A'}{event.depth_cm != null ? ' cm' : ''}</span>
               </div>
               <div className="metric-chip">
                 <span className="m-label">Vehicle Speed</span>
                 <span className="m-val">{event.speed_kmh ?? 'N/A'}{event.speed_kmh != null ? ' km/h' : ''}</span>
-=======
-                <span className="m-val">{event.depth_cm ? `${event.depth_cm} cm` : 'N/A'}</span>
-              </div>
-              <div className="metric-chip">
-                <span className="m-label">Vehicle Speed</span>
-                <span className="m-val">{event.speed_kmh ? `${event.speed_kmh} km/h` : 'N/A'}</span>
->>>>>>> feature/dashboard-map
               </div>
               <div className="metric-chip">
                 <span className="m-label">Classification</span>
@@ -148,22 +120,14 @@ const AiModal = ({ event, onClose, onUpdateStatus }) => {
                 <line x1="0" y1="100" x2={svgWidth} y2="100" stroke="rgba(255,255,255,0.05)" strokeDasharray="4 4" />
                 
                 {/* Waveform Lines */}
-<<<<<<< HEAD
                 {telemetry.length > 1 ? (
-=======
-                {telemetry.length > 0 ? (
->>>>>>> feature/dashboard-map
                   <>
                     <polyline fill="none" stroke="#FF5F56" strokeWidth="2" points={pointsX} opacity="0.8" />
                     <polyline fill="none" stroke="#00F0FF" strokeWidth="2.5" points={pointsY} />
                     <polyline fill="none" stroke="#27C93F" strokeWidth="2" points={pointsZ} opacity="0.8" />
                   </>
                 ) : (
-<<<<<<< HEAD
-                  <text x={svgWidth / 2} y={svgHeight / 2} textAnchor="middle" fill="rgba(255,255,255,0.55)" fontSize="13">
-=======
-                  <text x="50%" y="50%" fill="#A0AEC0" fontSize="12" textAnchor="middle" alignmentBaseline="middle">
->>>>>>> feature/dashboard-map
+                  <text x={svgWidth / 2} y={svgHeight / 2} textAnchor="middle" fill="var(--text-secondary)" fontSize="13">
                     Telemetry not reported by backend
                   </text>
                 )}
