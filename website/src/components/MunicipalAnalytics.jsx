@@ -71,7 +71,11 @@ const MunicipalAnalytics = ({ events, onSelectEvent, isLoading, error }) => {
           </div>
           <div className="kpi-content">
             <span className="kpi-label">Active Hazards</span>
+<<<<<<< HEAD
             <span className="kpi-value">{activeHazards}</span>
+=======
+            <span className="kpi-value">{events.filter(e => e.status !== 'repaired').length}</span>
+>>>>>>> feature/dashboard-map
             <span className="kpi-subtext">{criticalCount} Critical Action Required</span>
           </div>
         </div>
@@ -82,8 +86,13 @@ const MunicipalAnalytics = ({ events, onSelectEvent, isLoading, error }) => {
           </div>
           <div className="kpi-content">
             <span className="kpi-label">Est. Maintenance Cost</span>
+<<<<<<< HEAD
             <span className="kpi-value">₹ {estBudgetLakhs} L</span>
             <span className="kpi-subtext">Derived from live hazard severity</span>
+=======
+            <span className="kpi-value">₹ {totalEvents ? estBudgetLakhs : '0'} L</span>
+            <span className="kpi-subtext">PWD Allocated Fund Pool</span>
+>>>>>>> feature/dashboard-map
           </div>
         </div>
 
@@ -93,8 +102,13 @@ const MunicipalAnalytics = ({ events, onSelectEvent, isLoading, error }) => {
           </div>
           <div className="kpi-content">
             <span className="kpi-label">Avg Repair SLA</span>
+<<<<<<< HEAD
             <span className="kpi-value">N/A</span>
             <span className="kpi-subtext">Repair timing is not yet reported</span>
+=======
+            <span className="kpi-value">{totalEvents ? '4.2 Hrs' : '0 Hrs'}</span>
+            <span className="kpi-subtext">{totalEvents ? '88% Within Target SLA' : 'No Data Available'}</span>
+>>>>>>> feature/dashboard-map
           </div>
         </div>
 

@@ -616,6 +616,7 @@
   border: 1px solid rgba(16, 185, 129, 0.3);
 }
 
+<<<<<<< HEAD
 .dashboard-data-message,
 .dashboard-state-message,
 .map-empty-state,
@@ -674,4 +675,8 @@
 
 .dashboard-table-state {
   padding: 1.4rem !important;
+=======
+.map-tiles-dark {
+  filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+>>>>>>> feature/dashboard-map
 }

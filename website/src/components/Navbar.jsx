@@ -11,18 +11,13 @@ const Navbar = () => {
         </a>
         
         <ul className="navbar-links">
-          <li><a href="#features" className="nav-link">Features</a></li>
-          <li><a href="#how-it-works" className="nav-link">How it Works</a></li>
-          <li><a href="#about" className="nav-link">About</a></li>
+          <li><a href="#features" className="nav-link">Features & How it Works</a></li>
         </ul>
 
         <div className="navbar-actions">
           <ThemeToggle />
-          <a href="/dashboard" className="btn btn-outline">
+          <a href="/dashboard" className="btn btn-primary">
             Live Dashboard
-          </a>
-          <a href="/simulator" className="btn btn-primary">
-            Mobile App
           </a>
         </div>
       </div>

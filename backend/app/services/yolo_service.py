@@ -13,7 +13,7 @@ from ultralytics.utils.ops import scale_boxes
 
 
 _MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "best.pt"
-_CONFIDENCE_THRESHOLD = 0.10
+_CONFIDENCE_THRESHOLD = 0.25
 _IOU_THRESHOLD = 0.45
 _MAX_DETECTIONS = 20
 _IMAGE_SIZE = 1280
@@ -142,21 +142,24 @@ def load_yolo_model() -> Any:
         return _model
 
 
-def _severity_for(detected_class: str, confidence: float) -> str:
+def _severity_for(detected_class: str, area_ratio: float) -> str:
     label = _LABELS.get(detected_class, detected_class)
 
     if label == "Pothole":
-        if confidence >= 0.60:
+        if area_ratio >= 0.10:
             return "Critical"
-        if confidence >= 0.35:
+        if area_ratio >= 0.05:
             return "High"
         return "Medium"
 
     if label == "Alligator Crack":
-        return "High" if confidence >= 0.50 else "Medium"
+        return "High" if area_ratio >= 0.15 else "Medium"
 
     if label in {"Longitudinal Crack", "Transverse Crack"}:
-        return "Medium" if confidence >= 0.35 else "Low"
+        return "Medium" if area_ratio >= 0.10 else "Low"
+
+    if label == "Structural Anomaly - Flag for Manual Inspection":
+        return "Critical"
 
     return "Low"
 
@@ -242,6 +245,16 @@ def detect_image(image_path: Path) -> list[dict[str, object]]:
         with _inference_lock, torch.inference_mode():
             raw_output = model(input_tensor, augment=False)
             prediction_tensor = _apply_nms(raw_output, len(model_names))
+            
+            # Extract max raw confidence to detect OOD scenes
+            pred = raw_output[0] if isinstance(raw_output, (list, tuple)) else raw_output
+            if pred.shape[-1] == len(model_names) + 5: # YOLOv5 format
+                obj_conf = pred[0, :, 4]
+                cls_conf = pred[0, :, 5:].max(dim=1).values
+                max_conf = (obj_conf * cls_conf).max().item()
+            else: # YOLOv8/YOLOv5u format
+                max_conf = pred[0, :, 4:].max().item()
+
             if prediction_tensor.numel():
                 scale_boxes(
                     input_tensor.shape[2:],
@@ -262,6 +275,8 @@ def detect_image(image_path: Path) -> list[dict[str, object]]:
         )[:_MAX_DETECTIONS]
         detections: list[dict[str, object]] = []
 
+        image_area = float(original_shape[0] * original_shape[1])
+
         for (
             x1,
             y1,
@@ -272,12 +287,26 @@ def detect_image(image_path: Path) -> list[dict[str, object]]:
         ) in predictions:
             confidence = float(confidence_value)
             raw_label = model_names[int(class_id)]
+            box_area = (float(x2) - float(x1)) * (float(y2) - float(y1))
+            area_ratio = box_area / image_area if image_area > 0 else 0.0
+
             detections.append(
                 {
                     "label": _LABELS.get(raw_label, raw_label),
                     "confidence": confidence,
                     "bbox": [float(x1), float(y1), float(x2), float(y2)],
-                    "severity": _severity_for(raw_label, confidence),
+                    "severity": _severity_for(raw_label, area_ratio),
+                }
+            )
+
+        # OOD Fallback Check
+        if not detections and max_conf < 0.05:
+            detections.append(
+                {
+                    "label": "Structural Anomaly - Flag for Manual Inspection",
+                    "confidence": max_conf,
+                    "bbox": [0.0, 0.0, float(original_shape[1]), float(original_shape[0])],
+                    "severity": "Critical",
                 }
             )
 

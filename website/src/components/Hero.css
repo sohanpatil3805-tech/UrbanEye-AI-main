@@ -21,10 +21,11 @@
 }
 
 .hero-container {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 60px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   align-items: center;
+  text-align: center;
 }
 
 .badge {
@@ -47,13 +48,14 @@
 .hero-subtitle {
   font-size: 1.1rem;
   color: var(--text-secondary);
-  margin-bottom: 40px;
-  max-width: 500px;
+  margin: 0 auto 40px auto;
+  max-width: 600px;
 }
 
 .hero-cta {
   display: flex;
   gap: 16px;
+  justify-content: center;
 }
 
 .btn-lg {
