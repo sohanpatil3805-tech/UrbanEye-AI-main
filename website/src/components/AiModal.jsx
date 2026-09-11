@@ -5,13 +5,7 @@ import './AiModal.css';
 const AiModal = ({ event, onClose, onUpdateStatus }) => {
   if (!event) return null;
 
-  const telemetry = event.telemetry || [
-    { t: 0, x: 0.1, y: 0.98, z: 0.12 },
-    { t: 1, x: 0.35, y: 1.15, z: 0.28 },
-    { t: 2, x: 1.8, y: 3.84, z: 2.91 },
-    { t: 3, x: 0.3, y: 1.1, z: 0.25 },
-    { t: 4, x: 0.08, y: 0.99, z: 0.1 }
-  ];
+  const telemetry = event.telemetry || [];
 
   // Calculate SVG line paths for Accelerometer X, Y, Z
   const svgWidth = 400;
@@ -36,7 +30,7 @@ const AiModal = ({ event, onClose, onUpdateStatus }) => {
     return `${x},${y}`;
   }).join(' ');
 
-  const peakY = Math.max(...telemetry.map(t => t.y)).toFixed(2);
+  const peakY = telemetry.length > 0 ? Math.max(...telemetry.map(t => t.y)).toFixed(2) : 'N/A';
 
   return (
     <div className="ai-modal-overlay" onClick={onClose}>
@@ -95,11 +89,11 @@ const AiModal = ({ event, onClose, onUpdateStatus }) => {
             <div className="cv-metrics-row">
               <div className="metric-chip">
                 <span className="m-label">Est. Depth</span>
-                <span className="m-val">{event.depth_cm || 6.4} cm</span>
+                <span className="m-val">{event.depth_cm ? `${event.depth_cm} cm` : 'N/A'}</span>
               </div>
               <div className="metric-chip">
                 <span className="m-label">Vehicle Speed</span>
-                <span className="m-val">{event.speed_kmh || 42} km/h</span>
+                <span className="m-val">{event.speed_kmh ? `${event.speed_kmh} km/h` : 'N/A'}</span>
               </div>
               <div className="metric-chip">
                 <span className="m-label">Classification</span>
@@ -112,7 +106,14 @@ const AiModal = ({ event, onClose, onUpdateStatus }) => {
           <div className="telemetry-card glass-panel">
             <div className="telemetry-header">
               <h3><Activity size={18} /> 3-Axis Accelerometer Shock Signal</h3>
-              <span className="peak-g-chip">Peak Shock: {peakY}g</span>
+              <div style={{display: 'flex', alignItems: 'center', gap: '10px'}}>
+                {event.is_simulated && (
+                  <div className="simulated-badge" style={{ display: 'inline-flex', alignItems: 'center', background: 'rgba(255, 170, 0, 0.1)', color: '#FFAA00', padding: '2px 8px', borderRadius: '6px', fontSize: '10px', border: '1px solid rgba(255, 170, 0, 0.4)', fontWeight: 'bold' }}>
+                    <AlertTriangle size={12} style={{marginRight: '4px'}}/> Simulated Data
+                  </div>
+                )}
+                <span className="peak-g-chip">Peak Shock: {peakY}g</span>
+              </div>
             </div>
 
             {/* Custom SVG Waveform Chart */}
@@ -124,9 +125,17 @@ const AiModal = ({ event, onClose, onUpdateStatus }) => {
                 <line x1="0" y1="100" x2={svgWidth} y2="100" stroke="rgba(255,255,255,0.05)" strokeDasharray="4 4" />
                 
                 {/* Waveform Lines */}
-                <polyline fill="none" stroke="#FF5F56" strokeWidth="2" points={pointsX} opacity="0.8" />
-                <polyline fill="none" stroke="#00F0FF" strokeWidth="2.5" points={pointsY} />
-                <polyline fill="none" stroke="#27C93F" strokeWidth="2" points={pointsZ} opacity="0.8" />
+                {telemetry.length > 0 ? (
+                  <>
+                    <polyline fill="none" stroke="#FF5F56" strokeWidth="2" points={pointsX} opacity="0.8" />
+                    <polyline fill="none" stroke="#00F0FF" strokeWidth="2.5" points={pointsY} />
+                    <polyline fill="none" stroke="#27C93F" strokeWidth="2" points={pointsZ} opacity="0.8" />
+                  </>
+                ) : (
+                  <text x="50%" y="50%" fill="#A0AEC0" fontSize="12" textAnchor="middle" alignmentBaseline="middle">
+                    Telemetry not reported by backend
+                  </text>
+                )}
               </svg>
 
               <div className="legend-row">
@@ -148,7 +157,7 @@ const AiModal = ({ event, onClose, onUpdateStatus }) => {
               </div>
               <div className="detail-item">
                 <span className="d-label"><Layers size={14} /> Mobile Sensor ID</span>
-                <span className="d-val font-mono">{event.device_id || 'MOB-SENSOR-980'}</span>
+                <span className="d-val font-mono">{event.device_id || 'Not reported'}</span>
               </div>
               <div className="detail-item">
                 <span className="d-label"><ShieldCheck size={14} /> Verification Status</span>

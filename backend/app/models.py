@@ -20,6 +20,11 @@ class EventPayload(BaseModel):
     longitude: float = Field(..., ge=-180, le=180)
     source: Literal["mobile", "camera", "manual"] = "camera"
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+    depth_cm: float | None = None
+    speed_kmh: float | None = None
+    device_id: str | None = None
+    telemetry: list[dict[str, float]] | None = None
+    is_simulated: bool = False
 
 
 class EventResponse(EventPayload):

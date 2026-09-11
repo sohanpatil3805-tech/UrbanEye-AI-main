@@ -18,11 +18,8 @@ const Navbar = () => {
 
         <div className="navbar-actions">
           <ThemeToggle />
-          <a href="/dashboard" className="btn btn-outline">
+          <a href="/dashboard" className="btn btn-primary">
             Live Dashboard
-          </a>
-          <a href="/simulator" className="btn btn-primary">
-            Mobile App
           </a>
         </div>
       </div>

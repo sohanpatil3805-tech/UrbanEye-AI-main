@@ -615,3 +615,7 @@
   background: rgba(16, 185, 129, 0.15);
   border: 1px solid rgba(16, 185, 129, 0.3);
 }
+
+.map-tiles-dark {
+  filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+}

@@ -108,9 +108,7 @@ const Dashboard = () => {
   const criticalEvents = events.filter(e => e.severity === 'critical').length;
   const pendingWorkOrders = events.filter(e => e.status === 'pending').length;
 
-  const mapTileUrl = mapTheme === 'light'
-    ? 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}'
-    : 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+  const mapTileUrl = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 
   return (
     <div className="dashboard-page">
@@ -159,9 +157,6 @@ const Dashboard = () => {
           </div>
           <div className="navbar-actions">
             <ThemeToggle />
-            <Link to="/simulator" className="btn btn-outline sim-link-btn" target="_blank">
-              <Cpu size={16} /> Open Mobile App
-            </Link>
             <Link to="/" className="btn btn-outline">Home</Link>
           </div>
         </div>
@@ -256,9 +251,10 @@ const Dashboard = () => {
                     </div>
                   <MapContainer center={[19.076, 72.8777]} zoom={12} scrollWheelZoom className="leaflet-map">
                     <TileLayer
-                      key={mapTileUrl}
+                      key={`${mapTileUrl}-${mapTheme}`}
                       attribution='&copy; OpenStreetMap contributors'
                       url={mapTileUrl}
+                      className={mapTheme === 'dark' ? 'map-tiles-dark' : ''}
                     />
                     {events.map((event) => (
                       <Marker key={event.id} position={[event.latitude, event.longitude]} icon={getMarkerIcon(event)}>

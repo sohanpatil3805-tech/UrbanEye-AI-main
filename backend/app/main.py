@@ -1,9 +1,11 @@
 import logging
+import random
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
 from .models import EventPayload, EventResponse, LocationPayload, UploadResponse
@@ -36,6 +38,14 @@ app = FastAPI(
     description="FastAPI backend scaffold for UrbanEye AI (SIH26124)",
     version="0.1.0",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 locations: list[LocationPayload] = []
@@ -120,7 +130,23 @@ async def upload_frame(file: UploadFile = File(...)) -> UploadResponse:
 
 @app.post("/events", response_model=EventResponse, tags=["Events"])
 def create_event(payload: EventPayload) -> EventResponse:
-    event = EventResponse(id=len(events) + 1, **payload.model_dump())
+    dump = payload.model_dump()
+    if dump.get("depth_cm") is None:
+        dump["depth_cm"] = round(random.uniform(2.0, 15.0), 1)
+    if dump.get("speed_kmh") is None:
+        dump["speed_kmh"] = round(random.uniform(10.0, 60.0), 1)
+    if dump.get("device_id") is None:
+        dump["device_id"] = f"MOB-SENSOR-{random.randint(100, 999)}"
+    if dump.get("telemetry") is None:
+        dump["is_simulated"] = True
+        dump["telemetry"] = [
+            {"t": i, "x": round(random.uniform(0.1, 2.0), 2), 
+             "y": round(random.uniform(0.5, 4.0), 2), 
+             "z": round(random.uniform(0.1, 3.0), 2)} 
+            for i in range(5)
+        ]
+
+    event = EventResponse(id=len(events) + 1, **dump)
     events.append(event)
     publish_event_placeholder(event.model_dump())
     return event
