@@ -123,7 +123,7 @@ class _CameraScreenState extends State<CameraScreen>
       }
 
       final description = cameras.firstWhere(
-        (camera) => camera.lensDirection == CameraLensDirection.front,
+        (camera) => camera.lensDirection == CameraLensDirection.back,
         orElse: () => cameras.first,
       );
       final controller = CameraController(
@@ -612,7 +612,7 @@ class _CameraScreenState extends State<CameraScreen>
               GradientHeader(
                 eyebrow: 'URBANEYE AI  •  LIVE MONITORING',
                 title: 'Camera',
-                subtitle: 'Front camera preview and capture controls.',
+                subtitle: 'Rear camera preview and capture controls.',
                 leading: _HeaderBackButton(
                   onPressed: () => Navigator.of(context).maybePop(),
                 ),
