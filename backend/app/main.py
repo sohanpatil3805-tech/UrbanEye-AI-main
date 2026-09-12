@@ -30,11 +30,63 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    global _seed_conf_matrix, _confusion_source_note
+    # ── Load YOLO model ───────────────────────────────────────────────────
     try:
         load_yolo_model()
     except ModelUnavailableError:
-        # Keep the API available so /detect can return a clear 503 response.
         logger.exception("Road-damage model could not be loaded at startup")
+
+    # ── Pre-compute confusion seed from best.pt (cached; avoids torch.load per poll) ──
+    try:
+        import torch
+        model_path = Path("app/models/best.pt")
+        if model_path.exists():
+            ckpt = torch.load(model_path, map_location="cpu", weights_only=False)
+            raw_cm = ckpt.get("confusion_matrix", None)
+            if raw_cm is not None:
+                mat = getattr(raw_cm, "matrix", raw_cm)
+                if hasattr(mat, "tolist"):
+                    mat = mat.tolist()
+                _seed_conf_matrix = [[int(mat[i][j]) for j in range(4)] for i in range(4)]
+                _confusion_source_note = "Loaded from best.pt validation confusion matrix + live inference"
+            else:
+                train_metrics = ckpt.get("train_metrics", {})
+                precision = float(train_metrics.get("metrics/precision(B)", 0.6519))
+                recall    = float(train_metrics.get("metrics/recall(B)",    0.5484))
+                n_per_class = 250
+                tp  = round(recall * n_per_class)
+                fn  = n_per_class - tp
+                weights = [
+                    [0,    0.55, 0.25, 0.20],
+                    [0.55, 0,    0.25, 0.20],
+                    [0.25, 0.25, 0,    0.50],
+                    [0.20, 0.20, 0.60, 0   ],
+                ]
+                seed: list[list[int]] = [[0] * 4 for _ in range(4)]
+                for i in range(4):
+                    seed[i][i] = tp
+                    rem = fn
+                    for j in range(4):
+                        if i != j:
+                            seed[i][j] = round(fn * weights[i][j])
+                            rem -= seed[i][j]
+                    if rem > 0:
+                        off = max((j for j in range(4) if j != i), key=lambda j: weights[i][j])
+                        seed[i][off] += rem
+                _seed_conf_matrix = seed
+                _confusion_source_note = "Derived from validation P/R in best.pt + live inference"
+            logger.info("Confusion matrix seed computed from best.pt")
+    except Exception:
+        logger.exception("Could not compute confusion matrix seed; using domain-knowledge fallback")
+        _seed_conf_matrix = [
+            [137, 62, 28, 23],
+            [62, 137, 28, 23],
+            [28, 28, 137, 57],
+            [23, 23, 68, 137],
+        ]
+        _confusion_source_note = "Fallback domain-knowledge matrix + live inference"
+
     yield
 
 
@@ -73,6 +125,9 @@ _CONF_LABEL_TO_IDX: dict[str, int] = {
 _live_conf_matrix: list[list[int]] = [[0] * 4 for _ in range(4)]
 _detect_image_count: int = 0
 _conf_matrix_lock = Lock()
+# Cached seed matrix computed ONCE at startup (avoids torch.load on every poll)
+_seed_conf_matrix: list[list[int]] = [[0] * 4 for _ in range(4)]
+_confusion_source_note: str = "Derived from validation P/R in best.pt + live inference"
 
 _DETECTION_EVENT_TYPES = {
     "Longitudinal Crack": "longitudinal_crack",
@@ -293,93 +348,26 @@ def get_model_metrics() -> dict[str, float]:
 def get_confusion_matrix() -> dict:
     """Return a 4×4 per-class confusion matrix.
 
-    The matrix is seeded from the validation metrics baked into best.pt, then
-    augmented with live per-class TP counts gathered from every /detect call.
-    Each cell [i][j] = number of times an instance of class i was predicted as
-    class j (diagonal = TP, off-diagonal = FP/FN proxy).
+    Seed is computed ONCE at startup from best.pt. Live per-class TP counts
+    from every /detect call are merged on top in real-time.
     """
-    import torch
-
-    model_path = Path("app/models/best.pt")
-    if not model_path.exists():
-        raise HTTPException(status_code=404, detail="Model file not found")
-
-    # ── 1. Build seed matrix from checkpoint ─────────────────────────────────
-    seed: list[list[int]] = [[0] * 4 for _ in range(4)]
-    source_note = "Derived from validation P/R in best.pt + live inference"
-
-    try:
-        ckpt = torch.load(model_path, map_location="cpu", weights_only=False)
-
-        # Try to read a stored ConfusionMatrix object (ultralytics saves this)
-        raw_cm = ckpt.get("confusion_matrix", None)
-        if raw_cm is not None:
-            import numpy as np
-            mat = getattr(raw_cm, "matrix", raw_cm)
-            if hasattr(mat, "tolist"):
-                mat = mat.tolist()
-            # Take top-left 4×4 (excludes background class if present)
-            for i in range(4):
-                for j in range(4):
-                    seed[i][j] = int(mat[i][j])
-            source_note = "Loaded from best.pt validation confusion matrix + live inference"
-        else:
-            # Derive from overall Precision / Recall stored in train_metrics
-            train_metrics = ckpt.get("train_metrics", {})
-            precision = float(train_metrics.get("metrics/precision(B)", 0.6519))
-            recall    = float(train_metrics.get("metrics/recall(B)",    0.5484))
-
-            # Assume ~250 validation instances per class (typical RDD2022 split)
-            n_per_class = 250
-            tp  = round(recall * n_per_class)
-            fn  = n_per_class - tp
-            # Domain-weighted FN distribution (similar classes confused more):
-            # LC↔TC are both linear cracks → higher mutual confusion
-            # AC↔PH have some structural similarity
-            weights = [
-                [0,    0.55, 0.25, 0.20],   # LC FN → TC, AC, PH
-                [0.55, 0,    0.25, 0.20],   # TC FN → LC, AC, PH
-                [0.25, 0.25, 0,    0.50],   # AC FN → LC, TC, PH
-                [0.20, 0.20, 0.60, 0   ],   # PH FN → LC, TC, AC
-            ]
-            for i in range(4):
-                seed[i][i] = tp
-                remaining_fn = fn
-                for j in range(4):
-                    if i != j:
-                        seed[i][j] = round(fn * weights[i][j])
-                        remaining_fn -= seed[i][j]
-                # Absorb rounding remainder into largest off-diagonal
-                if remaining_fn > 0:
-                    off = max((j for j in range(4) if j != i), key=lambda j: weights[i][j])
-                    seed[i][off] += remaining_fn
-    except Exception:
-        logger.exception("Could not derive seed confusion matrix; using fallback")
-        # Hardcoded fallback matching known overall metrics
-        seed = [
-            [137, 62, 28, 23],
-            [62, 137, 28, 23],
-            [28, 28, 137, 57],
-            [23, 23, 68, 137],
-        ]
-
-    # ── 2. Merge with live tracking ───────────────────────────────────────────
+    # ── Merge cached seed with live tracking (no file I/O) ─────────────────
     with _conf_matrix_lock:
         combined = [
-            [seed[i][j] + _live_conf_matrix[i][j] for j in range(4)]
+            [_seed_conf_matrix[i][j] + _live_conf_matrix[i][j] for j in range(4)]
             for i in range(4)
         ]
         total_images = _detect_image_count
 
-    # ── 3. Compute per-class stats ────────────────────────────────────────────
+    # ── Per-class stats ────────────────────────────────────────────────
     per_class = []
     for i in range(4):
-        tp_val  = combined[i][i]
-        fp_val  = sum(combined[j][i] for j in range(4) if j != i)
-        fn_val  = sum(combined[i][j] for j in range(4) if j != i)
-        prec    = round(tp_val / max(tp_val + fp_val, 1) * 100, 1)
-        rec     = round(tp_val / max(tp_val + fn_val, 1) * 100, 1)
-        f1      = round(2 * prec * rec / max(prec + rec, 1e-6), 1)
+        tp_val = combined[i][i]
+        fp_val = sum(combined[j][i] for j in range(4) if j != i)
+        fn_val = sum(combined[i][j] for j in range(4) if j != i)
+        prec   = round(tp_val / max(tp_val + fp_val, 1) * 100, 1)
+        rec    = round(tp_val / max(tp_val + fn_val, 1) * 100, 1)
+        f1     = round(2 * prec * rec / max(prec + rec, 1e-6), 1)
         per_class.append({
             "class":     _CONF_CLASS_NAMES[i],
             "tp":        tp_val,
@@ -395,5 +383,6 @@ def get_confusion_matrix() -> dict:
         "matrix":                 combined,
         "per_class":              per_class,
         "total_images_processed": total_images,
-        "source":                 source_note,
+        "source":                 _confusion_source_note,
     }
+
