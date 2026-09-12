@@ -33,6 +33,7 @@ class EventPayload(BaseModel):
     device_id: str | None = None
     telemetry: list[dict[str, float]] | None = None
     is_simulated: bool = False
+    image_filename: str | None = None
 
 
 class EventResponse(EventPayload):

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from PIL import Image, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
 
@@ -77,6 +78,13 @@ def root() -> dict[str, str]:
 @app.get("/ping", tags=["Health"])
 def health() -> dict[str, str]:
     return {"status": "healthy"}
+
+@app.get("/uploads/{filename}", tags=["Vision"])
+def get_uploaded_image(filename: str):
+    file_path = Path("uploads") / filename
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Image not found")
+    return FileResponse(file_path)
 
 
 @app.post("/location", tags=["Telemetry"])
@@ -160,6 +168,7 @@ async def upload_for_detection(
                 latitude=latitude,
                 longitude=longitude,
                 source="camera",
+                image_filename=filename,
             )
             events.append(event)
             incidents.append(event)
