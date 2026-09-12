@@ -7,6 +7,7 @@ from io import BytesIO
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
@@ -42,6 +43,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+Path("uploads").mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # Local dashboards can run on changing LAN hosts/ports. Deployed servers can
 # restrict this comma-separated list; this API does not use cookie credentials.
@@ -160,6 +164,7 @@ async def upload_for_detection(
                 latitude=latitude,
                 longitude=longitude,
                 source="camera",
+                image_filename=filename,
             )
             events.append(event)
             incidents.append(event)

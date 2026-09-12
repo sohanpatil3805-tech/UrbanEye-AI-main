@@ -1,5 +1,6 @@
 import React from 'react';
 import { X, Cpu, Activity, AlertTriangle, ShieldCheck, MapPin, Layers, Eye } from 'lucide-react';
+import { API_BASE_URL } from '../services/api';
 import './AiModal.css';
 
 const AiModal = ({ event, onClose, onUpdateStatus }) => {
@@ -58,9 +59,19 @@ const AiModal = ({ event, onClose, onUpdateStatus }) => {
             </div>
 
             <div className="asphalt-canvas">
-              {/* Simulated Road Asphalt Background */}
-              <div className="asphalt-texture"></div>
-              <div className="road-lane-line"></div>
+              {event.image_filename ? (
+                <img 
+                  src={`${API_BASE_URL}/uploads/${event.image_filename}`} 
+                  alt="Detected road hazard" 
+                  className="real-world-image" 
+                />
+              ) : (
+                <>
+                  {/* Simulated Road Asphalt Background */}
+                  <div className="asphalt-texture"></div>
+                  <div className="road-lane-line"></div>
+                </>
+              )}
 
               {/* Bounding Box Visual Overlay */}
               <div className={`bounding-box-overlay severity-${event.severity || 'high'}`}>
