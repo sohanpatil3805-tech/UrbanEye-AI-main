@@ -114,3 +114,20 @@ export async function fetchModelMetrics({ signal } = {}) {
   
   return response.json();
 }
+
+const CONFUSION_URL = import.meta.env?.DEV
+  ? '/api/model/confusion'
+  : `${API_BASE_URL}/model/confusion`;
+
+export async function fetchConfusionMatrix({ signal } = {}) {
+  const response = await fetch(CONFUSION_URL, {
+    headers: { Accept: 'application/json' },
+    signal,
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch confusion matrix');
+  }
+
+  return response.json();
+}
