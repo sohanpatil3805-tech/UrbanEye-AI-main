@@ -53,7 +53,7 @@ app.add_middleware(
         if origin.strip()
     ],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["Accept", "Content-Type", "Authorization"],
 )
 
@@ -163,7 +163,7 @@ async def upload_for_detection(
             )
             events.append(event)
             incidents.append(event)
-            publish_event_placeholder(event.model_dump())
+            publish_event_placeholder(event.dict())
 
     return {
         "status": "success",
@@ -193,7 +193,7 @@ async def upload_frame(file: UploadFile = File(...)) -> UploadResponse:
 
 @app.post("/events", response_model=EventResponse, tags=["Events"])
 def create_event(payload: EventPayload) -> EventResponse:
-    dump = payload.model_dump()
+    dump = payload.dict()
     if dump.get("depth_cm") is None:
         dump["depth_cm"] = round(random.uniform(2.0, 15.0), 1)
     if dump.get("speed_kmh") is None:
@@ -211,7 +211,7 @@ def create_event(payload: EventPayload) -> EventResponse:
 
     event = EventResponse(id=len(events) + 1, **dump)
     events.append(event)
-    publish_event_placeholder(event.model_dump())
+    publish_event_placeholder(event.dict())
     return event
 
 
