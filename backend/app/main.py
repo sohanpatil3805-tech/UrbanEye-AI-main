@@ -90,7 +90,7 @@ def get_uploaded_image(filename: str):
 @app.post("/location", tags=["Telemetry"])
 def ingest_location(payload: LocationPayload) -> dict[str, str]:
     locations.append(payload)
-    logger.info("Received location: %s", payload.model_dump(mode="json"))
+    logger.info("Received location: %s", payload.dict())
     return {"status": "success"}
 
 
@@ -178,7 +178,7 @@ async def upload_for_detection(
         "status": "success",
         "filename": filename,
         "detections": detections,
-        "incidents": [incident.model_dump(mode="json") for incident in incidents],
+        "incidents": [incident.dict() for incident in incidents],
     }
 
 

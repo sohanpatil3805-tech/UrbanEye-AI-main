@@ -13,8 +13,8 @@ from ultralytics.utils.ops import scale_boxes
 
 
 _MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "best.pt"
-_CONFIDENCE_THRESHOLD = 0.25
-_IOU_THRESHOLD = 0.45
+_CONFIDENCE_THRESHOLD = 0.20
+_IOU_THRESHOLD = 0.40
 _MAX_DETECTIONS = 20
 _IMAGE_SIZE = 1280
 _DETERMINISTIC_SEED = 0
