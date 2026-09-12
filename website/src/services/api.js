@@ -97,3 +97,20 @@ export async function updateEventStatus(eventId, status) {
 
   return response.json();
 }
+
+const METRICS_URL = import.meta.env?.DEV
+  ? '/api/model/metrics'
+  : `${API_BASE_URL}/model/metrics`;
+
+export async function fetchModelMetrics({ signal } = {}) {
+  const response = await fetch(METRICS_URL, {
+    headers: { Accept: 'application/json' },
+    signal,
+  });
+  
+  if (!response.ok) {
+    throw new Error('Failed to fetch model metrics');
+  }
+  
+  return response.json();
+}

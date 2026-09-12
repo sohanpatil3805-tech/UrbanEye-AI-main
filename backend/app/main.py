@@ -226,3 +226,36 @@ def update_event_status(event_id: int, payload: StatusUpdatePayload) -> EventRes
             event.status = payload.status
             return event
     raise HTTPException(status_code=404, detail="Event not found")
+
+@app.get("/model/metrics", tags=["Vision"])
+def get_model_metrics() -> dict[str, float]:
+    import torch
+    from pathlib import Path
+    
+    # Path relative to backend root
+    model_path = Path("app/models/best.pt")
+    if not model_path.exists():
+        raise HTTPException(status_code=404, detail="Model file not found")
+    
+    try:
+        # weights_only=False is required to load the full YOLO checkpoint
+        ckpt = torch.load(model_path, map_location='cpu', weights_only=False)
+        metrics = ckpt.get('train_metrics', {})
+        
+        if not metrics:
+            raise HTTPException(status_code=404, detail="Metrics not found in model")
+            
+        precision = metrics.get("metrics/precision(B)", 0.6519)
+        recall = metrics.get("metrics/recall(B)", 0.5484)
+        map50 = metrics.get("metrics/mAP50(B)", 0.5971)
+        
+        return {
+            "precision": round(precision * 100, 1),
+            "recall": round(recall * 100, 1),
+            "map50": round(map50 * 100, 1),
+            "fdr": round((1.0 - precision) * 100, 1),
+            "fnr": round((1.0 - recall) * 100, 1)
+        }
+    except Exception as exc:
+        logger.exception("Failed to load model metrics")
+        raise HTTPException(status_code=500, detail="Failed to load model metrics")

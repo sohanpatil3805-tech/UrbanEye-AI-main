@@ -17,6 +17,7 @@ const Hero = () => {
           </p>
           <div className="hero-cta fade-in-up delay-400">
             <Link to="/dashboard" className="btn btn-primary btn-lg">Explore Dashboard</Link>
+            <Link to="/metrics" className="btn btn-outline btn-lg">View AI Metrics</Link>
           </div>
         </div>
       </div>

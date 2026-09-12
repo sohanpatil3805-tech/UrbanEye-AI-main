@@ -7,6 +7,7 @@ import Footer from './components/Footer';
 import Dashboard from './components/Dashboard';
 
 import Simulator from './components/Simulator';
+import ModelMetrics from './components/ModelMetrics';
 
 const LandingPage = () => (
   <>
@@ -25,6 +26,7 @@ function App() {
           <Route path="/" element={<LandingPage />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/simulator" element={<Simulator />} />
+          <Route path="/metrics" element={<ModelMetrics />} />
         </Routes>
       </Router>
     </div>
