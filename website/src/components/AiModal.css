@@ -157,17 +157,6 @@
   opacity: 0.4;
 }
 
-.real-world-image {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  opacity: 0.9;
-  filter: brightness(0.8);
-}
-
 /* YOLO Bounding Box Overlay */
 .bounding-box-overlay {
   position: absolute;
