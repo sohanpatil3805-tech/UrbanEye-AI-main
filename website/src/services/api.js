@@ -1,4 +1,4 @@
-export const API_BASE_URL = `http://${window.location.hostname}:8000`;
+export const API_BASE_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8000`;
 const EVENTS_URL = import.meta.env?.DEV
   ? '/api/events'
   : `${API_BASE_URL}/events`;
