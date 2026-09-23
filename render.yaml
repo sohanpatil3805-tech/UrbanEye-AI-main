@@ -18,4 +18,4 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_URL
-        value: https://urbaneye-backend.onrender.com
+        value: https://urbaneye-backend-62w1.onrender.com
