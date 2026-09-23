@@ -126,6 +126,7 @@ def load_yolo_model() -> Any:
                 path=str(_MODEL_PATH),
                 autoshape=False,
                 force_reload=False,
+                trust_repo=True,
             )
             _verify_loaded_model(model)
             _configure_model(model)
