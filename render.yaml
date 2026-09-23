@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: urbaneye-backend
+    env: docker
+    rootDir: backend
+    plan: free
+
+  - type: static
+    name: urbaneye-frontend
+    rootDir: website
+    buildCommand: npm install && npm run build
+    publishPath: dist
+    pullRequestPreviewsEnabled: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_URL
+        fromService:
+          name: urbaneye-backend
+          type: web
+          property: url

@@ -29,7 +29,8 @@ const Simulator = () => {
     };
 
     try {
-      const response = await fetch('http://localhost:8000/events', {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+      const response = await fetch(`${apiUrl}/events`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
