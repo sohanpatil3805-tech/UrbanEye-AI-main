@@ -5,11 +5,12 @@ services:
     rootDir: backend
     plan: free
 
-  - type: static
+  - type: web
     name: urbaneye-frontend
+    env: static
     rootDir: website
     buildCommand: npm install && npm run build
-    publishPath: dist
+    staticPublishPath: ./dist
     pullRequestPreviewsEnabled: false
     routes:
       - type: rewrite
