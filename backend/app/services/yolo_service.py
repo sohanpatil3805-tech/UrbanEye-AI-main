@@ -16,8 +16,10 @@ _MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "best.pt"
 _CONFIDENCE_THRESHOLD = 0.20
 _IOU_THRESHOLD = 0.40
 _MAX_DETECTIONS = 20
-_IMAGE_SIZE = 1280
+_IMAGE_SIZE = 640  # Reduced from 1280 to prevent out-of-memory on Render
 _DETERMINISTIC_SEED = 0
+
+torch.set_num_threads(1)  # Prevent PyTorch from spawning too many threads and using all RAM
 
 _LABELS = {
     "D00": "Longitudinal Crack",
